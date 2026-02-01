@@ -1,0 +1,47 @@
+{
+  "IMAGE_BACKBONE": "resnet50",
+  "TEXT_ENCODER": "bert-base-uncased",
+  "FUSION_TYPE": "concat",
+  "DROPOUT": 0.3,
+  "HIDDEN_DIM": 512,
+  "FREEZE_BACKBONE": true,
+
+  "ATTRIBUTES": {
+    "theme": {
+      "num_classes": 10,
+      "labels": ["Food", "Fashion", "Tech", "Health", "Travel", "Finance", "Entertainment", "Sports", "Education", "Other"]
+    },
+    "sentiment": {
+      "num_classes": 3,
+      "labels": ["Positive", "Negative", "Neutral"]
+    },
+    "emotion": {
+      "num_classes": 8,
+      "labels": ["Excitement", "Trust", "Joy", "Fear", "Anger", "Sadness", "Surprise", "Anticipation"]
+    },
+    "dominant_colour": {
+      "num_classes": 10,
+      "labels": ["Red", "Blue", "Green", "Yellow", "Orange", "Purple", "Black", "White", "Brown", "Multi"]
+    },
+    "attention_score": {
+      "num_classes": 3,
+      "labels": ["High", "Medium", "Low"]
+    },
+    "trust_safety": {
+      "num_classes": 3,
+      "labels": ["Safe", "Unsafe", "Questionable"]
+    },
+    "target_audience": {
+      "num_classes": 8,
+      "labels": ["General", "Food Lovers", "Tech Enthusiasts", "Fashionistas", "Parents", "Professionals", "Fitness Enthusiasts", "Students"]
+    },
+    "predicted_ctr": {
+      "num_classes": 3,
+      "labels": ["High", "Medium", "Low"]
+    },
+    "likelihood_shares": {
+      "num_classes": 3,
+      "labels": ["High", "Medium", "Low"]
+    }
+  }
+}

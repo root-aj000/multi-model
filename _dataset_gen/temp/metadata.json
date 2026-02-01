@@ -1,0 +1,92 @@
+[
+    {
+        "id": 0,
+        "product": "Pizza",
+        "generated_filename": "ad_0001.jpg",
+        "source_image_url": "https://static.vecteezy.com/system/resources/previews/030/660/303/large_2x/pizza-with-white-background-high-quality-ultra-hd-free-photo.jpg",
+        "background_removed": true,
+        "original_ad_text": "Fresh hot pizza delivered to your door! 50% OFF today only. Order Now!",
+        "timestamp": "2026-01-29 14:23:27"
+    },
+    {
+        "id": 1,
+        "product": "Phone",
+        "generated_filename": "ad_0002.jpg",
+        "source_image_url": "https://www.pngplay.com/wp-content/uploads/7/Apple-IPhone-Mobile-PNG-HD-Quality.png",
+        "background_removed": true,
+        "original_ad_text": "New iPhone 15 Pro Max - Revolutionary camera system. Pre-order now.",
+        "timestamp": "2026-01-29 14:23:37"
+    },
+    {
+        "id": 2,
+        "product": "Clothing",
+        "generated_filename": "ad_0003.jpg",
+        "source_image_url": "https://thumbs.dreamstime.com/b/hoodie-dress-mockup-front-back-white-background-high-quality-d-illustration-266975099.jpg",
+        "background_removed": true,
+        "original_ad_text": "Summer fashion collection - Up to 70% discount on all items!",
+        "timestamp": "2026-01-29 14:23:42"
+    },
+    {
+        "id": 3,
+        "product": "Label",
+        "generated_filename": "ad_0004.jpg",
+        "source_image_url": "https://img.freepik.com/premium-vector/glass-bottle-with-fresh-aloe-vera-leaves-blank-label-product-white-background-glass_912214-75387.jpg",
+        "background_removed": true,
+        "original_ad_text": "Warning: This product contains chemicals known to cause harm.",
+        "timestamp": "2026-01-29 14:23:48"
+    },
+    {
+        "id": 4,
+        "product": "Equipment",
+        "generated_filename": "ad_0005.jpg",
+        "source_image_url": "https://img.freepik.com/premium-photo/group-sports-equipment-white-background_1077884-6399.jpg?w=2000",
+        "background_removed": true,
+        "original_ad_text": "Join our gym today! First month FREE. Transform your body.",
+        "timestamp": "2026-01-29 14:23:54"
+    },
+    {
+        "id": 5,
+        "product": "Chart",
+        "generated_filename": "ad_0006.jpg",
+        "source_image_url": "https://media.istockphoto.com/id/1060936530/pt/vetorial/infographic-charts-and-diagrams-set-of-modern-vector-isometric-elements.jpg?s=1024x1024&w=is&k=20&c=bCcW4bS8vxwfMzHd4JG2-LbXzeX6Dq7Lvm4714mWAAg=",
+        "background_removed": true,
+        "original_ad_text": "Breaking news: Stock market crashes amid global uncertainty.",
+        "timestamp": "2026-01-29 14:24:00"
+    },
+    {
+        "id": 6,
+        "product": "Beach",
+        "generated_filename": "ad_0007.jpg",
+        "source_image_url": "https://static.vecteezy.com/system/resources/previews/044/153/241/large_2x/beach-product-background-detailed-high-quality-free-photo.jpg",
+        "background_removed": true,
+        "original_ad_text": "Family vacation packages starting at $499. Book your adventure!",
+        "timestamp": "2026-01-29 14:24:07"
+    },
+    {
+        "id": 7,
+        "product": "Computer",
+        "generated_filename": "ad_0008.jpg",
+        "source_image_url": "https://img.freepik.com/premium-photo/desktop-computers-with-white-background-high-quality_889056-98553.jpg",
+        "background_removed": true,
+        "original_ad_text": "Online courses 50% off. Learn coding from experts!",
+        "timestamp": "2026-01-29 14:24:12"
+    },
+    {
+        "id": 8,
+        "product": "Stage",
+        "generated_filename": "ad_0009.jpg",
+        "source_image_url": "https://png.pngtree.com/background/20230621/original/pngtree-white-geometric-stage-and-podium-in-3d-picture-image_3928671.jpg",
+        "background_removed": true,
+        "original_ad_text": "Concert tickets available now! Limited seats remaining.",
+        "timestamp": "2026-01-29 14:24:18"
+    },
+    {
+        "id": 9,
+        "product": "Equipment",
+        "generated_filename": "ad_0010.jpg",
+        "source_image_url": "https://img.freepik.com/premium-photo/group-sports-equipment-white-background_1077884-6399.jpg?w=2000",
+        "background_removed": true,
+        "original_ad_text": "Sports gear clearance sale - Everything must go!",
+        "timestamp": "2026-01-29 14:24:24"
+    }
+]
