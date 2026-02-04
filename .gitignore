@@ -9,3 +9,5 @@ local
 csv
 csv_kiwi
 csv_main
+temp/
+temp_images/
