@@ -1,13 +1,14 @@
 import pandas as pd
 import glob
 import os
-
+from pathlib import Path
 # 1. Get the absolute path of the folder where this script lives
 script_dir = os.path.dirname(os.path.abspath(__file__))
-
+save_dir = Path(script_dir) / "Data_clean"
+print(f"Save directory: {save_dir}")
 # 2. Construct the full path to your csv_main folder
 # Change "csv_main" below if your folder name is different
-target_folder = os.path.join(script_dir, "csv_main")
+target_folder = os.path.join(script_dir, "csv")
 search_path = os.path.join(target_folder, "*.csv")
 
 print(f"Looking for CSVs in: {search_path}")
@@ -40,6 +41,6 @@ else:
     combined_csv = pd.concat(all_data, ignore_index=True)
 
     # 5. Export
-    output_path = os.path.join(script_dir, "main.csv")
+    output_path = os.path.join(save_dir, "To_be_clean.csv")
     combined_csv.to_csv(output_path, index=False)
     print(f"Done! Saved as: {output_path}")

@@ -2,7 +2,11 @@
 Text Module for Feature Extraction
 ===================================
 This module extracts meaningful features from text using transformer models.
-It uses BERT (or similar models) to convert text into fixed-size feature vectors.
+It uses BERT, DistilBERT, RoBERTa, or other transformers to convert text 
+into fixed-size feature vectors.
+
+Key Fix: Uses AutoModel to automatically select the correct architecture
+for each model type (BERT, DistilBERT, RoBERTa, etc.)
 
 Author: [Your Name]
 Date: [Date]
@@ -11,10 +15,21 @@ Date: [Date]
 import logging
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple, List
-from transformers import BertModel, AutoModel, BertTokenizer, AutoTokenizer
-import os
+from typing import Optional, List, Dict, Any
 from pathlib import Path
+import os
+
+# Import transformers with proper error handling
+try:
+    from transformers import (
+        AutoModel,      # Automatically selects correct model class
+        AutoTokenizer,  # Automatically selects correct tokenizer
+        AutoConfig      # For getting model config without loading weights
+    )
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    logging.warning("transformers library not installed. Install with: pip install transformers")
 
 
 # Configure logging for debugging and monitoring
@@ -32,7 +47,7 @@ logger = logging.getLogger(__name__)
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent.parent
 
-# Create a folder for downloaded models in the same directory as the script
+# Create a folder for downloaded models in the project directory
 MODEL_CACHE_DIR = SCRIPT_DIR / "local" / "BERT_MODELS"
 
 # Create subdirectories for different types of models
@@ -41,44 +56,102 @@ TEXT_MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 logger.info(f"Text model cache directory: {TEXT_MODEL_CACHE_DIR}")
 
-# Set environment variable to tell HuggingFace where to cache models
-# This makes transformers download models to our custom directory
+# Set environment variables to tell HuggingFace where to cache models
 os.environ['TRANSFORMERS_CACHE'] = str(TEXT_MODEL_CACHE_DIR)
 os.environ['HF_HOME'] = str(TEXT_MODEL_CACHE_DIR)
 os.environ['HF_HUB_CACHE'] = str(TEXT_MODEL_CACHE_DIR)
 
 
-# Supported encoder architectures
-SUPPORTED_ENCODERS = {
+# ============================================================================
+# SUPPORTED ENCODER CONFIGURATIONS
+# ============================================================================
+
+SUPPORTED_ENCODERS: Dict[str, Dict[str, Any]] = {
+    # BERT Models
     "bert-base-uncased": {
-        "description": "BERT Base (110M params, good for general text)",
+        "description": "BERT Base Uncased (110M params, good for general text)",
         "hidden_size": 768,
-        "max_length": 512
+        "max_length": 512,
+        "has_pooler": True,
+        "model_type": "bert"
+    },
+    "distilbert-base-uncased": {
+        "description": "DistilBERT (66M params, 60% faster, 97% of BERT performance)",
+        "hidden_size": 768,
+        "max_length": 512,
+        "has_pooler": False,  # DistilBERT doesn't have pooler_output
+        "model_type": "distilbert"
     },
     # "bert-base-cased": {
     #     "description": "BERT Base Cased (110M params, preserves case)",
     #     "hidden_size": 768,
-    #     "max_length": 512
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "bert"
+    # },
+    # "distilbert-base-cased": {
+    #     "description": "DistilBERT Cased (66M params, preserves case)",
+    #     "hidden_size": 768,
+    #     "max_length": 512,
+    #     "has_pooler": False,
+    #     "model_type": "distilbert"
     # },
     # "bert-large-uncased": {
     #     "description": "BERT Large (340M params, higher accuracy)",
     #     "hidden_size": 1024,
-    #     "max_length": 512
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "bert"
     # },
-    "distilbert-base-uncased": {
-        "description": "DistilBERT (66M params, faster, 95% of BERT performance)",
-        "hidden_size": 768,
-        "max_length": 512
-    },
+    
+    # DistilBERT Models (Smaller, Faster)
+    
+    # RoBERTa Models (Improved BERT training)
     # "roberta-base": {
     #     "description": "RoBERTa Base (125M params, improved BERT)",
     #     "hidden_size": 768,
-    #     "max_length": 512
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "roberta"
     # },
     # "roberta-large": {
     #     "description": "RoBERTa Large (355M params, highest accuracy)",
     #     "hidden_size": 1024,
-    #     "max_length": 512
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "roberta"
+    # },
+    
+    # ALBERT Models (Parameter Efficient)
+    # "albert-base-v2": {
+    #     "description": "ALBERT Base v2 (12M params, smallest, parameter sharing)",
+    #     "hidden_size": 768,
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "albert"
+    # },
+    
+    # Smaller/Faster Models
+    # "prajjwal1/bert-tiny": {
+    #     "description": "BERT Tiny (4.4M params, very fast, lower accuracy)",
+    #     "hidden_size": 128,
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "bert"
+    # },
+    # "prajjwal1/bert-mini": {
+    #     "description": "BERT Mini (11M params, fast, moderate accuracy)",
+    #     "hidden_size": 256,
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "bert"
+    # },
+    # "prajjwal1/bert-small": {
+    #     "description": "BERT Small (29M params, balanced speed/accuracy)",
+    #     "hidden_size": 512,
+    #     "max_length": 512,
+    #     "has_pooler": True,
+    #     "model_type": "bert"
     # }
 }
 
@@ -87,152 +160,194 @@ class TextModule(nn.Module):
     """
     Text Feature Extraction Module
     
-    This module processes tokenized text through a transformer model (BERT)
+    This module processes tokenized text through a transformer model
     and converts it into fixed-size feature vectors suitable for downstream tasks.
     
     Architecture:
-    1. Text Tokens → BERT Encoder → Contextual Embeddings
+    1. Text Tokens → Transformer Encoder → Contextual Embeddings
     2. Extract [CLS] Token (represents entire sentence)
     3. Apply Dropout (for regularization)
     4. Linear Projection → Output Features
     
-    The [CLS] token is used because BERT is trained to encode the entire
-    sentence meaning into this special token.
+    Key Features:
+    - Uses AutoModel for automatic architecture selection
+    - Properly handles different model types (BERT, DistilBERT, RoBERTa, etc.)
+    - Caches models locally for faster subsequent loads
+    - Comprehensive logging and error handling
     
-    All pre-trained models are downloaded to: downloaded_models/text_models/
+    Supported Models:
+    - bert-base-uncased, bert-base-cased, bert-large-uncased
+    - distilbert-base-uncased, distilbert-base-cased
+    - roberta-base, roberta-large
+    - albert-base-v2
+    - prajjwal1/bert-tiny, bert-mini, bert-small (smaller/faster)
     """
     
     def __init__(
         self, 
-        encoder_name: str = "bert-base-uncased", 
-        out_features: int = 512, 
-        freeze: bool = False
+        encoder_name: str = "distilbert-base-uncased", 
+        out_features: int = 256, 
+        freeze: bool = False,
+        dropout_rate: float = 0.3
     ):
         """
         Initialize the Text Module with a transformer encoder.
         
         Args:
-            encoder_name (str): Name of the pre-trained transformer model
-                               Examples: 'bert-base-uncased', 'bert-large-uncased',
-                                        'roberta-base', 'distilbert-base-uncased'
-                               Default: 'bert-base-uncased'
+            encoder_name (str): Name of the pre-trained transformer model.
+                Options include:
+                - 'bert-base-uncased' (110M params, good balance)
+                - 'distilbert-base-uncased' (66M params, faster) [RECOMMENDED]
+                - 'roberta-base' (125M params, slightly better)
+                - 'albert-base-v2' (12M params, smallest)
+                - 'prajjwal1/bert-tiny' (4.4M params, fastest)
+                Default: 'distilbert-base-uncased'
             
-            out_features (int): Dimension of the output feature vector
-                               This is the size of features passed to fusion module
-                               Default: 512
+            out_features (int): Dimension of the output feature vector.
+                This is the size of features passed to fusion module.
+                Common values: 128, 256, 512
+                Default: 256
             
-            freeze (bool): Whether to freeze the transformer weights
-                          True = Don't update BERT during training (faster, less memory)
-                          False = Fine-tune BERT weights (better performance, slower)
-                          Default: False
+            freeze (bool): Whether to freeze the transformer weights.
+                True = Don't update transformer during training (faster, less memory)
+                False = Fine-tune transformer weights (better performance, slower)
+                Default: False
+            
+            dropout_rate (float): Dropout probability for regularization.
+                Higher values (0.3-0.5) help prevent overfitting.
+                Default: 0.3
         
         Raises:
-            ValueError: If out_features is not positive
+            ImportError: If transformers library is not installed
+            ValueError: If parameters are invalid
             RuntimeError: If model loading fails
-        
-        Note:
-            Pre-trained models will be downloaded to: downloaded_models/text_models/
-            The download happens only once, then cached for future use.
         """
         super(TextModule, self).__init__()
         
-        # Step 1: Log initialization
+        # Check if transformers is available
+        if not TRANSFORMERS_AVAILABLE:
+            raise ImportError(
+                "transformers library is required. "
+                "Install with: pip install transformers"
+            )
+        
+        # ====================================================================
+        # STEP 1: Log initialization
+        # ====================================================================
         logger.info("=" * 60)
         logger.info("Initializing Text Module")
         logger.info("=" * 60)
         logger.info(f"Encoder: {encoder_name}")
         logger.info(f"Output Features: {out_features}")
         logger.info(f"Freeze Backbone: {freeze}")
+        logger.info(f"Dropout Rate: {dropout_rate}")
         logger.info(f"Model Cache Directory: {TEXT_MODEL_CACHE_DIR}")
         
-        # Step 2: Validate parameters
-        self._validate_parameters(encoder_name, out_features, freeze)
+        # ====================================================================
+        # STEP 2: Validate parameters
+        # ====================================================================
+        self._validate_parameters(encoder_name, out_features, freeze, dropout_rate)
         
-        # Step 3: Store configuration
+        # ====================================================================
+        # STEP 3: Store configuration
+        # ====================================================================
         self.encoder_name = encoder_name
         self.out_features = out_features
         self.freeze = freeze
+        self.dropout_rate = dropout_rate
         self.model_cache_dir = TEXT_MODEL_CACHE_DIR
         
-        # Step 4: Load pre-trained transformer model
-        # This is the main component that understands text
+        # Determine if this model has a pooler output
+        if encoder_name in SUPPORTED_ENCODERS:
+            self.has_pooler = SUPPORTED_ENCODERS[encoder_name].get("has_pooler", True)
+            self.model_type = SUPPORTED_ENCODERS[encoder_name].get("model_type", "bert")
+        else:
+            # For unknown models, assume no pooler (safer)
+            self.has_pooler = False
+            self.model_type = "unknown"
+            logger.warning(f"Unknown model type for '{encoder_name}', assuming no pooler output")
+        
+        # ====================================================================
+        # STEP 4: Load pre-trained transformer model using AutoModel
+        # ====================================================================
         try:
             logger.info(f"Loading pre-trained model: {encoder_name}")
             logger.info(f"Models will be downloaded/cached to: {TEXT_MODEL_CACHE_DIR}")
             
-            # Check if model is already cached
+            # Check if model might be cached
             self._check_cached_models()
             
-            # Try to load as BERT first, fallback to AutoModel for other types
-            try:
-                self.bert = BertModel.from_pretrained(
-                    encoder_name,
-                    cache_dir=str(TEXT_MODEL_CACHE_DIR)
-                )
-                logger.info("✓ Loaded as BertModel")
-            except Exception as e:
-                logger.warning(f"Failed to load as BertModel: {str(e)}")
-                logger.info("Attempting to load with AutoModel...")
-                self.bert = AutoModel.from_pretrained(
-                    encoder_name,
-                    cache_dir=str(TEXT_MODEL_CACHE_DIR)
-                )
-                logger.info("✓ Loaded with AutoModel")
+            # ================================================================
+            # KEY FIX: Use AutoModel instead of BertModel
+            # AutoModel automatically selects the correct architecture:
+            # - BertModel for bert-*
+            # - DistilBertModel for distilbert-*
+            # - RobertaModel for roberta-*
+            # - AlbertModel for albert-*
+            # ================================================================
+            self.transformer = AutoModel.from_pretrained(
+                encoder_name,
+                cache_dir=str(TEXT_MODEL_CACHE_DIR)
+            )
             
-            # Log model information
-            logger.info(f"Model hidden size: {self.bert.config.hidden_size}")
-            logger.info(f"Model parameters: {sum(p.numel() for p in self.bert.parameters()):,}")
+            # Log successful load
+            model_class_name = type(self.transformer).__name__
+            logger.info(f"✓ Loaded as {model_class_name}")
             
-            # Log cache location
+            # Get hidden size from the loaded model's config
+            self.hidden_size = self.transformer.config.hidden_size
+            logger.info(f"Model hidden size: {self.hidden_size}")
+            
+            # Count and log parameters
+            total_params = sum(p.numel() for p in self.transformer.parameters())
+            logger.info(f"Model parameters: {total_params:,}")
             logger.info(f"✓ Model cached in: {TEXT_MODEL_CACHE_DIR}")
             
         except Exception as e:
             error_msg = f"Failed to load transformer model '{encoder_name}': {str(e)}"
             logger.error(error_msg)
-            logger.error("Please check if the model name is correct and you have internet connection")
+            logger.error("Please check:")
+            logger.error("  1. Model name is correct")
+            logger.error("  2. Internet connection is available")
+            logger.error("  3. Sufficient disk space for model download")
+            logger.error(f"  4. Cache directory is writable: {TEXT_MODEL_CACHE_DIR}")
             raise RuntimeError(error_msg)
         
-        # Step 5: Freeze transformer weights if requested
-        # Freezing means the weights won't be updated during training
-        # This is useful for:
-        # - Faster training
-        # - Less memory usage
-        # - Preventing overfitting on small datasets
+        # ====================================================================
+        # STEP 5: Freeze transformer weights if requested
+        # ====================================================================
         if freeze:
             logger.info("Freezing transformer backbone weights...")
             frozen_params = 0
             
-            for param in self.bert.parameters():
-                # Set requires_grad to False means gradients won't be computed
+            for param in self.transformer.parameters():
                 param.requires_grad = False
                 frozen_params += param.numel()
             
             logger.info(f"✓ Frozen {frozen_params:,} parameters")
             logger.info("Note: Transformer weights will not be updated during training")
         else:
-            trainable_params = sum(p.numel() for p in self.bert.parameters() if p.requires_grad)
+            trainable_params = sum(
+                p.numel() for p in self.transformer.parameters() if p.requires_grad
+            )
             logger.info(f"Transformer is trainable with {trainable_params:,} parameters")
         
-        # Step 6: Create dropout layer
-        # Dropout randomly sets some activations to zero during training
-        # This prevents overfitting by forcing the network to learn robust features
-        # 0.3 means 30% of neurons are randomly turned off during training
-        dropout_rate = 0.3
+        # ====================================================================
+        # STEP 6: Create dropout layer
+        # ====================================================================
         self.dropout = nn.Dropout(dropout_rate)
         logger.info(f"Added dropout layer with rate: {dropout_rate}")
         
-        # Step 7: Create projection layer
-        # This layer transforms BERT's hidden size to our desired output size
-        # For example: BERT-base has 768 dimensions, we might want 512
+        # ====================================================================
+        # STEP 7: Create projection layer
+        # ====================================================================
         try:
-            bert_hidden_size = self.bert.config.hidden_size
-            self.fc = nn.Linear(bert_hidden_size, out_features)
-            logger.info(f"Created projection layer: {bert_hidden_size} → {out_features}")
+            self.projection = nn.Linear(self.hidden_size, out_features)
+            logger.info(f"Created projection layer: {self.hidden_size} → {out_features}")
             
-            # Initialize weights properly for better training
-            # Xavier initialization helps with gradient flow
-            nn.init.xavier_uniform_(self.fc.weight)
-            nn.init.zeros_(self.fc.bias)
+            # Initialize weights with Xavier uniform for better training
+            nn.init.xavier_uniform_(self.projection.weight)
+            nn.init.zeros_(self.projection.bias)
             logger.info("✓ Initialized projection layer with Xavier uniform")
             
         except Exception as e:
@@ -240,59 +355,37 @@ class TextModule(nn.Module):
             logger.error(error_msg)
             raise RuntimeError(error_msg)
         
-        # Step 8: Log total parameters
+        # ====================================================================
+        # STEP 8: Log final statistics
+        # ====================================================================
         total_params = sum(p.numel() for p in self.parameters())
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        frozen_params = total_params - trainable_params
         
         logger.info("=" * 60)
         logger.info("Text Module Initialization Complete")
         logger.info(f"Total Parameters: {total_params:,}")
         logger.info(f"Trainable Parameters: {trainable_params:,}")
-        logger.info(f"Frozen Parameters: {total_params - trainable_params:,}")
+        logger.info(f"Frozen Parameters: {frozen_params:,}")
         logger.info("=" * 60)
-    
-    
-    def _check_cached_models(self) -> None:
-        """
-        Check if models are already cached and log information.
-        
-        This helps users understand if a download will occur or if
-        the model will be loaded from cache.
-        """
-        if TEXT_MODEL_CACHE_DIR.exists():
-            cached_items = list(TEXT_MODEL_CACHE_DIR.iterdir())
-            if cached_items:
-                logger.info(f"Found {len(cached_items)} item(s) in cache directory")
-                
-                # Check for model-specific directories
-                model_dirs = [d for d in cached_items if d.is_dir() and 'model' in d.name.lower()]
-                if model_dirs:
-                    logger.info(f"Found {len(model_dirs)} model cache director(ies)")
-                    logger.info("Model may load from cache (faster)")
-                else:
-                    logger.info("Model will be downloaded (first time)")
-            else:
-                logger.info("Cache directory is empty - model will be downloaded")
-        else:
-            logger.info("Cache directory doesn't exist - model will be downloaded")
     
     
     def _validate_parameters(
         self, 
         encoder_name: str, 
         out_features: int, 
-        freeze: bool
+        freeze: bool,
+        dropout_rate: float
     ) -> None:
         """
+    
         Validate initialization parameters.
-        
-        This method checks if all parameters are valid before proceeding
-        with model initialization. It's better to catch errors early.
-        
+    
         Args:
-            encoder_name (str): Name of the encoder to validate
-            out_features (int): Output feature dimension to validate
-            freeze (bool): Freeze flag to validate
+            encoder_name: Name of the encoder to validate
+            out_features: Output feature dimension to validate
+            freeze: Freeze flag to validate
+            dropout_rate: Dropout rate to validate
         
         Raises:
             TypeError: If parameters have wrong type
@@ -300,53 +393,71 @@ class TextModule(nn.Module):
         """
         # Validate encoder_name
         if not isinstance(encoder_name, str):
-            error_msg = f"encoder_name must be a string, got {type(encoder_name)}"
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(f"encoder_name must be a string, got {type(encoder_name)}")
         
         if not encoder_name.strip():
-            error_msg = "encoder_name cannot be empty"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError("encoder_name cannot be empty")
         
-        # Log information about known encoders
+        # Log info about known encoders
         if encoder_name in SUPPORTED_ENCODERS:
             info = SUPPORTED_ENCODERS[encoder_name]
             logger.info(f"Encoder info: {info['description']}")
             logger.info(f"Hidden size: {info['hidden_size']}")
             logger.info(f"Max sequence length: {info['max_length']}")
+            logger.info(f"Has pooler output: {info['has_pooler']}")
         else:
             logger.warning(f"Encoder '{encoder_name}' is not in the list of known encoders")
             logger.warning("It may still work if it's a valid HuggingFace model")
-            logger.warning(f"Known encoders: {list(SUPPORTED_ENCODERS.keys())}")
+            logger.info(f"Known encoders: {list(SUPPORTED_ENCODERS.keys())}")
         
         # Validate out_features
         if not isinstance(out_features, int):
-            error_msg = f"out_features must be an integer, got {type(out_features)}"
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(f"out_features must be an integer, got {type(out_features)}")
         
         if out_features <= 0:
-            error_msg = f"out_features must be positive, got {out_features}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError(f"out_features must be positive, got {out_features}")
         
-        # Common feature dimensions for sanity check
         if out_features > 4096:
-            logger.warning(f"out_features={out_features} is unusually large. Are you sure?")
+            logger.warning(f"out_features={out_features} is unusually large")
         
         if out_features < 64:
-            logger.warning(f"out_features={out_features} is quite small. This may lose information.")
+            logger.warning(f"out_features={out_features} is quite small, may lose information")
         
         # Validate freeze
         if not isinstance(freeze, bool):
-            error_msg = f"freeze must be a boolean, got {type(freeze)}"
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(f"freeze must be a boolean, got {type(freeze)}")
+        
+        # Validate dropout_rate
+        if not isinstance(dropout_rate, (int, float)):
+            raise TypeError(f"dropout_rate must be a number, got {type(dropout_rate)}")
+        
+        if not 0 <= dropout_rate < 1:
+            raise ValueError(f"dropout_rate must be in [0, 1), got {dropout_rate}")
         
         logger.debug("✓ Parameter validation passed")
     
-
+    
+    def _check_cached_models(self) -> None:
+        """Check if models are already cached and log information."""
+        if TEXT_MODEL_CACHE_DIR.exists():
+            cached_items = list(TEXT_MODEL_CACHE_DIR.iterdir())
+            if cached_items:
+                logger.info(f"Found {len(cached_items)} item(s) in cache directory")
+                
+                # Check for model-specific directories
+                model_dirs = [
+                    d for d in cached_items 
+                    if d.is_dir() and ('model' in d.name.lower() or 'hub' in d.name.lower())
+                ]
+                if model_dirs:
+                    logger.info(f"Found {len(model_dirs)} model cache director(ies)")
+                    logger.info("Model may load from cache (faster)")
+            else:
+                logger.info("Cache directory is empty - model will be downloaded")
+        else:
+            logger.info("Cache directory doesn't exist - model will be downloaded")
+    
+    
     def forward(
         self, 
         input_ids: torch.Tensor, 
@@ -359,130 +470,89 @@ class TextModule(nn.Module):
         produces fixed-size feature vectors.
         
         Args:
-            input_ids (torch.Tensor): Tokenized text input
-                                     Shape: [batch_size, sequence_length]
-                                     Each value is a token ID (integer)
-                                     Example: [[101, 2023, 2003, 102, 0, 0],  # "this is"
-                                              [101, 7592, 2088, 102, 0, 0]]  # "hello world"
+            input_ids (torch.Tensor): Tokenized text input.
+                Shape: [batch_size, sequence_length]
+                Each value is a token ID (integer).
             
-            attention_mask (torch.Tensor, optional): Mask to ignore padding tokens
-                                                    Shape: [batch_size, sequence_length]
-                                                    1 = real token, 0 = padding token
-                                                    Example: [[1, 1, 1, 1, 0, 0],
-                                                             [1, 1, 1, 1, 0, 0]]
-                                                    Default: None (all tokens are real)
+            attention_mask (torch.Tensor, optional): Mask to ignore padding tokens.
+                Shape: [batch_size, sequence_length]
+                1 = real token, 0 = padding token.
+                Default: None (all tokens treated as real)
         
         Returns:
-            torch.Tensor: Extracted text features
-                         Shape: [batch_size, out_features]
-                         These features encode the meaning of the input text
+            torch.Tensor: Extracted text features.
+                Shape: [batch_size, out_features]
         
         Raises:
-            ValueError: If input_ids has invalid shape or type
+            ValueError: If input tensors have invalid shapes
             RuntimeError: If forward pass fails
-        
-        Example:
-            >>> text_module = TextModule(out_features=512)
-            >>> input_ids = torch.randint(0, 1000, (2, 128))  # 2 samples, 128 tokens
-            >>> attention_mask = torch.ones(2, 128)
-            >>> features = text_module(input_ids, attention_mask)
-            >>> print(features.shape)  # torch.Size([2, 512])
         """
         try:
             # Step 1: Validate inputs
             logger.debug(f"Processing text batch. Input shape: {input_ids.shape}")
             self._validate_forward_inputs(input_ids, attention_mask)
             
-            # Step 2: Pass through BERT/transformer encoder
-            # The encoder processes all tokens and generates contextual embeddings
-            # Each token's embedding is influenced by all other tokens (attention mechanism)
+            # Step 2: Pass through transformer encoder
             logger.debug("Passing input through transformer encoder...")
             
-            try:
-                # Run the transformer model
-                # outputs contains multiple things: hidden states, attentions, etc.
-                outputs = self.bert(
-                    input_ids=input_ids, 
-                    attention_mask=attention_mask
-                )
-                logger.debug("✓ Transformer encoding complete")
-                
-            except Exception as e:
-                error_msg = f"Transformer forward pass failed: {str(e)}"
-                logger.error(error_msg)
-                logger.error(f"Input IDs shape: {input_ids.shape}")
-                if attention_mask is not None:
-                    logger.error(f"Attention mask shape: {attention_mask.shape}")
-                raise RuntimeError(error_msg)
+            outputs = self.transformer(
+                input_ids=input_ids,
+                attention_mask=attention_mask
+            )
             
-            # Step 3: Extract [CLS] token representation
-            # The [CLS] token is the first token (index 0) in BERT
-            # It's trained to represent the meaning of the entire sentence
+            logger.debug("✓ Transformer encoding complete")
+            
+            # Step 3: Extract sentence representation
+            # ================================================================
+            # KEY FIX: Handle different model types correctly
             # 
-            # outputs.last_hidden_state shape: [batch_size, sequence_length, hidden_size]
-            # We want: [batch_size, hidden_size]
-            # So we take [:, 0, :] which means:
-            #   - : = all samples in batch
-            #   - 0 = first token ([CLS])
-            #   - : = all hidden dimensions
-            try:
-                cls_output = outputs.last_hidden_state[:, 0, :]
-                logger.debug(f"Extracted [CLS] token. Shape: {cls_output.shape}")
-                
-                # Verify we got the expected shape
-                batch_size = input_ids.size(0)
-                expected_hidden_size = self.bert.config.hidden_size
-                
-                if cls_output.shape != (batch_size, expected_hidden_size):
-                    error_msg = f"Unexpected [CLS] shape: {cls_output.shape}, expected: ({batch_size}, {expected_hidden_size})"
-                    logger.error(error_msg)
-                    raise RuntimeError(error_msg)
-                
-            except Exception as e:
-                error_msg = f"Failed to extract [CLS] token: {str(e)}"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
+            # - BERT, RoBERTa, ALBERT: Have pooler_output (processed [CLS])
+            # - DistilBERT: No pooler_output, use raw [CLS] token
+            # ================================================================
+            
+            if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                # Models with pooler (BERT, RoBERTa, ALBERT)
+                # pooler_output is the [CLS] token passed through a linear layer + tanh
+                pooled_output = outputs.pooler_output
+                logger.debug("Using pooler_output for sentence representation")
+            else:
+                # Models without pooler (DistilBERT)
+                # Use the raw [CLS] token (first token) from last hidden state
+                # last_hidden_state shape: [batch_size, seq_len, hidden_size]
+                pooled_output = outputs.last_hidden_state[:, 0, :]
+                logger.debug("Using last_hidden_state[:, 0] (CLS token) for sentence representation")
+            
+            logger.debug(f"Pooled output shape: {pooled_output.shape}")
             
             # Step 4: Apply dropout for regularization
-            # During training: randomly zeros some elements
-            # During evaluation: does nothing (automatically handled by PyTorch)
-            cls_output = self.dropout(cls_output)
+            pooled_output = self.dropout(pooled_output)
             logger.debug("Applied dropout regularization")
             
             # Step 5: Project to output dimension
-            # Transform from BERT's hidden size to our desired output size
-            # This allows us to control the feature dimension for downstream tasks
-            try:
-                output_features = self.fc(cls_output)
-                logger.debug(f"Projected to output features. Shape: {output_features.shape}")
-                
-                # Verify output shape
-                if output_features.shape != (batch_size, self.out_features):
-                    error_msg = f"Unexpected output shape: {output_features.shape}, expected: ({batch_size}, {self.out_features})"
-                    logger.error(error_msg)
-                    raise RuntimeError(error_msg)
-                
-                # Check for NaN or Inf values (indicates numerical instability)
-                if torch.isnan(output_features).any():
-                    error_msg = "NaN detected in output features"
-                    logger.error(error_msg)
-                    raise RuntimeError(error_msg)
-                
-                if torch.isinf(output_features).any():
-                    error_msg = "Inf detected in output features"
-                    logger.error(error_msg)
-                    raise RuntimeError(error_msg)
-                
-            except Exception as e:
-                error_msg = f"Projection layer failed: {str(e)}"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
+            output_features = self.projection(pooled_output)
+            logger.debug(f"Projected to output features. Shape: {output_features.shape}")
+            
+            # Step 6: Validate output
+            batch_size = input_ids.size(0)
+            expected_shape = (batch_size, self.out_features)
+            
+            if output_features.shape != expected_shape:
+                raise RuntimeError(
+                    f"Unexpected output shape: {output_features.shape}, "
+                    f"expected: {expected_shape}"
+                )
+            
+            # Check for numerical issues
+            if torch.isnan(output_features).any():
+                raise RuntimeError("NaN detected in output features")
+            
+            if torch.isinf(output_features).any():
+                raise RuntimeError("Inf detected in output features")
             
             logger.debug(f"✓ Text feature extraction complete. Output: {output_features.shape}")
             return output_features
             
         except Exception as e:
-            # Catch any unexpected errors
             error_msg = f"Text module forward pass failed: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
@@ -493,107 +563,90 @@ class TextModule(nn.Module):
         input_ids: torch.Tensor, 
         attention_mask: Optional[torch.Tensor]
     ) -> None:
-        """
-        Validate inputs for the forward pass.
-        
-        This method ensures that input tensors have the correct type,
-        shape, and values before processing.
-        
-        Args:
-            input_ids (torch.Tensor): Input token IDs to validate
-            attention_mask (torch.Tensor, optional): Attention mask to validate
-        
-        Raises:
-            TypeError: If inputs are not tensors
-            ValueError: If inputs have invalid shapes or values
-        """
+        """Validate inputs for the forward pass."""
         # Validate input_ids type
         if not isinstance(input_ids, torch.Tensor):
-            error_msg = f"input_ids must be torch.Tensor, got {type(input_ids)}"
-            logger.error(error_msg)
-            raise TypeError(error_msg)
+            raise TypeError(f"input_ids must be torch.Tensor, got {type(input_ids)}")
         
-        # Validate input_ids dimensions
-        # Expected: 2D tensor [batch_size, sequence_length]
+        # Validate input_ids dimensions (should be 2D)
         if input_ids.dim() != 2:
-            error_msg = f"input_ids must be 2D [batch_size, seq_len], got shape {input_ids.shape}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError(
+                f"input_ids must be 2D [batch_size, seq_len], got shape {input_ids.shape}"
+            )
         
-        # Check batch size is positive
         batch_size, seq_length = input_ids.shape
+        
         if batch_size <= 0:
-            error_msg = f"Batch size must be positive, got {batch_size}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError(f"Batch size must be positive, got {batch_size}")
         
-        # Check sequence length is reasonable
         if seq_length <= 0:
-            error_msg = f"Sequence length must be positive, got {seq_length}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError(f"Sequence length must be positive, got {seq_length}")
         
-        # Warn if sequence length exceeds BERT's maximum (usually 512)
-        max_seq_length = getattr(self.bert.config, 'max_position_embeddings', 512)
+        # Check max sequence length
+        max_seq_length = getattr(self.transformer.config, 'max_position_embeddings', 512)
         if seq_length > max_seq_length:
-            logger.warning(f"Sequence length {seq_length} exceeds model's maximum {max_seq_length}")
-            logger.warning("This may cause errors or unexpected behavior")
+            logger.warning(
+                f"Sequence length {seq_length} exceeds model's maximum {max_seq_length}"
+            )
         
-        # Validate input_ids values are non-negative (token IDs can't be negative)
+        # Validate input_ids values
         if (input_ids < 0).any():
-            error_msg = "input_ids contains negative values (token IDs must be non-negative)"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        # Validate input_ids are integers
-        if not input_ids.dtype in [torch.long, torch.int, torch.int32, torch.int64]:
-            logger.warning(f"input_ids should be integer type, got {input_ids.dtype}")
-            logger.warning("Attempting to convert to long...")
-            try:
-                input_ids = input_ids.long()
-            except Exception as e:
-                error_msg = f"Failed to convert input_ids to long: {str(e)}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
+            raise ValueError("input_ids contains negative values (token IDs must be non-negative)")
         
         # Validate attention_mask if provided
         if attention_mask is not None:
-            # Check type
             if not isinstance(attention_mask, torch.Tensor):
-                error_msg = f"attention_mask must be torch.Tensor, got {type(attention_mask)}"
-                logger.error(error_msg)
-                raise TypeError(error_msg)
+                raise TypeError(
+                    f"attention_mask must be torch.Tensor, got {type(attention_mask)}"
+                )
             
-            # Check shape matches input_ids
             if attention_mask.shape != input_ids.shape:
-                error_msg = f"attention_mask shape {attention_mask.shape} doesn't match input_ids shape {input_ids.shape}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            # Check values are 0 or 1
-            unique_values = torch.unique(attention_mask)
-            if not all(v in [0, 1] for v in unique_values.tolist()):
-                logger.warning(f"attention_mask should contain only 0s and 1s, got unique values: {unique_values.tolist()}")
+                raise ValueError(
+                    f"attention_mask shape {attention_mask.shape} doesn't match "
+                    f"input_ids shape {input_ids.shape}"
+                )
         
         logger.debug("✓ Forward input validation passed")
     
     
-    def get_model_cache_info(self) -> dict:
+    def get_model_info(self) -> Dict[str, Any]:
         """
-        Get information about cached models in the download directory.
+        Get information about the loaded model.
         
         Returns:
-            dict: Information about cached models including:
-                  - cache_dir: Path to cache directory
-                  - exists: Whether directory exists
-                  - cached_items: List of items in cache
-                  - total_size_mb: Total size of cache in MB
+            dict: Model information including:
+                - encoder_name: Name of the encoder
+                - model_class: Class name of the loaded model
+                - hidden_size: Hidden dimension of the transformer
+                - out_features: Output feature dimension
+                - frozen: Whether backbone is frozen
+                - total_params: Total number of parameters
+                - trainable_params: Number of trainable parameters
+        """
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         
-        Example:
-            >>> text_module = TextModule()
-            >>> cache_info = text_module.get_model_cache_info()
-            >>> print(f"Cache directory: {cache_info['cache_dir']}")
-            >>> print(f"Total size: {cache_info['total_size_mb']:.2f} MB")
+        return {
+            'encoder_name': self.encoder_name,
+            'model_class': type(self.transformer).__name__,
+            'model_type': self.model_type,
+            'hidden_size': self.hidden_size,
+            'out_features': self.out_features,
+            'has_pooler': self.has_pooler,
+            'frozen': self.freeze,
+            'dropout_rate': self.dropout_rate,
+            'total_params': total_params,
+            'trainable_params': trainable_params,
+            'frozen_params': total_params - trainable_params
+        }
+    
+    
+    def get_cache_info(self) -> Dict[str, Any]:
+        """
+        Get information about cached models.
+        
+        Returns:
+            dict: Cache information including directory path and size
         """
         info = {
             'cache_dir': str(TEXT_MODEL_CACHE_DIR),
@@ -612,7 +665,6 @@ class TextModule(nn.Module):
                 if item.is_file():
                     total_size += item.stat().st_size
                 elif item.is_dir():
-                    # Recursively get size of directories
                     for subitem in item.rglob('*'):
                         if subitem.is_file():
                             total_size += subitem.stat().st_size
@@ -627,50 +679,19 @@ class TextModule(nn.Module):
 # ============================================================================
 
 def get_text_model_cache_directory() -> Path:
-    """
-    Get the path to the text model cache directory.
-    
-    Returns:
-        Path: Path object pointing to the downloaded_models/text_models directory
-    
-    Example:
-        >>> cache_dir = get_text_model_cache_directory()
-        >>> print(f"Text models are cached in: {cache_dir}")
-    """
+    """Get the path to the text model cache directory."""
     return TEXT_MODEL_CACHE_DIR
 
 
 def list_cached_text_models() -> List[str]:
-    """
-    List all cached text model items in the download directory.
-    
-    Returns:
-        List[str]: List of cached items (directories and files)
-    
-    Example:
-        >>> cached_items = list_cached_text_models()
-        >>> print(f"Found {len(cached_items)} cached item(s):")
-        >>> for item in cached_items:
-        ...     print(f"  - {item}")
-    """
+    """List all cached text model items in the download directory."""
     if not TEXT_MODEL_CACHE_DIR.exists():
         return []
-    
-    cached_items = list(TEXT_MODEL_CACHE_DIR.iterdir())
-    return [item.name for item in cached_items]
+    return [item.name for item in TEXT_MODEL_CACHE_DIR.iterdir()]
 
 
 def get_text_cache_size() -> float:
-    """
-    Get the total size of cached text models in MB.
-    
-    Returns:
-        float: Total size in megabytes
-    
-    Example:
-        >>> cache_size = get_text_cache_size()
-        >>> print(f"Total text model cache size: {cache_size:.2f} MB")
-    """
+    """Get the total size of cached text models in MB."""
     if not TEXT_MODEL_CACHE_DIR.exists():
         return 0.0
     
@@ -682,25 +703,53 @@ def get_text_cache_size() -> float:
     return total_size / (1024 * 1024)
 
 
+def list_supported_encoders() -> Dict[str, str]:
+    """
+    List all supported encoder models with their descriptions.
+    
+    Returns:
+        dict: Mapping of encoder names to their descriptions
+    """
+    return {
+        name: info['description'] 
+        for name, info in SUPPORTED_ENCODERS.items()
+    }
+
+
+def load_tokenizer(encoder_name: str = "distilbert-base-uncased"):
+    """
+    Load a tokenizer with caching to the local directory.
+    
+    Args:
+        encoder_name: Name of the encoder/tokenizer to load
+    
+    Returns:
+        Tokenizer: HuggingFace tokenizer instance
+    """
+    if not TRANSFORMERS_AVAILABLE:
+        raise ImportError("transformers library is required")
+    
+    logger.info(f"Loading tokenizer: {encoder_name}")
+    logger.info(f"Tokenizer will be cached to: {TEXT_MODEL_CACHE_DIR}")
+    
+    tokenizer = AutoTokenizer.from_pretrained(
+        encoder_name,
+        cache_dir=str(TEXT_MODEL_CACHE_DIR)
+    )
+    
+    logger.info(f"✓ Loaded {type(tokenizer).__name__}")
+    return tokenizer
+
+
 def clear_text_model_cache(confirm: bool = False) -> bool:
     """
     Clear all cached text models from the download directory.
     
     Args:
-        confirm (bool): Must be True to actually delete files (safety measure)
+        confirm: Must be True to actually delete files (safety measure)
     
     Returns:
         bool: True if cache was cleared, False if not confirmed
-    
-    Warning:
-        This will delete all downloaded text model files!
-        They will need to be re-downloaded next time.
-    
-    Example:
-        >>> # Clear cache (requires confirmation)
-        >>> cleared = clear_text_model_cache(confirm=True)
-        >>> if cleared:
-        ...     print("Text model cache cleared successfully")
     """
     if not confirm:
         logger.warning("clear_text_model_cache() called without confirmation")
@@ -733,348 +782,118 @@ def clear_text_model_cache(confirm: bool = False) -> bool:
         return False
 
 
-def load_tokenizer(encoder_name: str = "bert-base-uncased"):
-    """
-    Load a tokenizer with caching to the local directory.
-    
-    Args:
-        encoder_name (str): Name of the encoder/tokenizer to load
-    
-    Returns:
-        Tokenizer: HuggingFace tokenizer instance
-    
-    Example:
-        >>> tokenizer = load_tokenizer("bert-base-uncased")
-        >>> encoded = tokenizer("Hello world", return_tensors="pt")
-    """
-    logger.info(f"Loading tokenizer: {encoder_name}")
-    logger.info(f"Tokenizer will be cached to: {TEXT_MODEL_CACHE_DIR}")
-    
-    try:
-        # Try BERT tokenizer first
-        tokenizer = BertTokenizer.from_pretrained(
-            encoder_name,
-            cache_dir=str(TEXT_MODEL_CACHE_DIR)
-        )
-        logger.info("✓ Loaded BertTokenizer")
-    except Exception:
-        # Fallback to AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(
-            encoder_name,
-            cache_dir=str(TEXT_MODEL_CACHE_DIR)
-        )
-        logger.info("✓ Loaded with AutoTokenizer")
-    
-    return tokenizer
-
-
 # ============================================================================
-# USAGE EXAMPLES AND TEST CASES
+# TEST AND EXAMPLES
 # ============================================================================
 
 if __name__ == "__main__":
-    """
-    Example usage and test cases for the TextModule.
-    This section demonstrates how to:
-    1. Initialize the module with different configurations
-    2. Process text inputs
-    3. Handle errors
-    4. Use with different transformer models
-    5. Check cached models
-    """
+    """Test the TextModule with different configurations."""
     
     print("=" * 80)
-    print("TEXT MODULE - Usage Examples")
+    print("TEXT MODULE - Test Suite")
     print("=" * 80)
     
-    # ------------------------------------------------------------------------
-    # Example 0: Show Model Cache Information
-    # ------------------------------------------------------------------------
-    print("\n[Example 0] Model Cache Information")
+    # Test 1: List supported encoders
+    print("\n[Test 1] Supported Encoders")
     print("-" * 80)
+    encoders = list_supported_encoders()
+    for name, description in encoders.items():
+        print(f"  • {name}")
+        print(f"    {description}")
     
-    print(f"\nText model cache directory: {TEXT_MODEL_CACHE_DIR}")
-    print(f"Directory exists: {TEXT_MODEL_CACHE_DIR.exists()}")
-    
-    cached_items = list_cached_text_models()
-    cache_size = get_text_cache_size()
-    
-    print(f"\nCached items: {len(cached_items)}")
-    if cached_items:
-        for item in cached_items[:5]:  # Show first 5
-            print(f"  - {item}")
-        if len(cached_items) > 5:
-            print(f"  ... and {len(cached_items) - 5} more")
-        print(f"\nTotal cache size: {cache_size:.2f} MB")
-    else:
-        print("  (No models cached yet - they will be downloaded on first use)")
-    
-    # ------------------------------------------------------------------------
-    # Example 1: Basic Usage with BERT
-    # ------------------------------------------------------------------------
-    print("\n[Example 1] Basic Usage with BERT-base")
+    # Test 2: Load DistilBERT (most common use case)
+    print("\n[Test 2] Load DistilBERT (Recommended for 10K samples)")
     print("-" * 80)
     
     try:
-        # Initialize text module
-        print("Initializing TextModule...")
-        print("(This will download the model if not already cached)")
         text_module = TextModule(
-            encoder_name="bert-base-uncased",
-            out_features=512,
-            freeze=False
+            encoder_name="distilbert-base-uncased",
+            out_features=128,
+            freeze=True,
+            dropout_rate=0.5
         )
-        print("✓ TextModule initialized successfully\n")
         
-        # Show cache info after initialization
-        cache_info = text_module.get_model_cache_info()
-        print(f"Cache information:")
-        print(f"  - Cache directory: {cache_info['cache_dir']}")
-        print(f"  - Items cached: {len(cache_info['cached_items'])}")
-        print(f"  - Total size: {cache_info['total_size_mb']:.2f} MB")
+        # Print model info
+        info = text_module.get_model_info()
+        print(f"\nModel Information:")
+        print(f"  • Encoder: {info['encoder_name']}")
+        print(f"  • Model Class: {info['model_class']}")
+        print(f"  • Model Type: {info['model_type']}")
+        print(f"  • Hidden Size: {info['hidden_size']}")
+        print(f"  • Output Features: {info['out_features']}")
+        print(f"  • Has Pooler: {info['has_pooler']}")
+        print(f"  • Frozen: {info['frozen']}")
+        print(f"  • Total Params: {info['total_params']:,}")
+        print(f"  • Trainable Params: {info['trainable_params']:,}")
+        print(f"  • Frozen Params: {info['frozen_params']:,}")
         
-        # Create dummy input data
-        # In real usage, these would come from a tokenizer
+        # Test forward pass
+        print("\n[Test 3] Forward Pass")
+        print("-" * 80)
+        
         batch_size = 4
-        seq_length = 128
+        seq_length = 64
         
-        print(f"\nCreating dummy input:")
-        print(f"  - Batch size: {batch_size}")
-        print(f"  - Sequence length: {seq_length}")
-        
-        # Random token IDs (in real usage, these come from tokenizer)
-        input_ids = torch.randint(0, 1000, (batch_size, seq_length))
-        
-        # Attention mask (1 for real tokens, 0 for padding)
-        # Let's simulate that each sample has different length
+        input_ids = torch.randint(0, 30000, (batch_size, seq_length))
         attention_mask = torch.ones(batch_size, seq_length)
-        attention_mask[0, 100:] = 0  # First sample: 100 real tokens
-        attention_mask[1, 80:] = 0   # Second sample: 80 real tokens
-        attention_mask[2, 120:] = 0  # Third sample: 120 real tokens
-        attention_mask[3, 90:] = 0   # Fourth sample: 90 real tokens
         
-        print(f"\nInput shapes:")
-        print(f"  - input_ids: {input_ids.shape}")
-        print(f"  - attention_mask: {attention_mask.shape}")
+        print(f"Input shape: {input_ids.shape}")
+        print(f"Attention mask shape: {attention_mask.shape}")
         
-        # Forward pass
-        print("\nRunning forward pass...")
-        with torch.no_grad():  # No gradient computation for inference
-            features = text_module(input_ids, attention_mask=attention_mask)
+        with torch.no_grad():
+            features = text_module(input_ids, attention_mask)
         
-        print(f"✓ Forward pass complete")
-        print(f"\nOutput:")
-        print(f"  - Shape: {features.shape}")
-        print(f"  - Data type: {features.dtype}")
-        print(f"  - Device: {features.device}")
-        print(f"  - Value range: [{features.min().item():.4f}, {features.max().item():.4f}]")
-        print(f"  - Mean: {features.mean().item():.4f}")
-        print(f"  - Std: {features.std().item():.4f}")
+        print(f"✓ Output shape: {features.shape}")
+        print(f"  Output dtype: {features.dtype}")
+        print(f"  Value range: [{features.min().item():.4f}, {features.max().item():.4f}]")
         
-    except Exception as e:
-        print(f"✗ Error: {str(e)}")
-    
-    
-    # ------------------------------------------------------------------------
-    # Example 2: Check Cache After Download
-    # ------------------------------------------------------------------------
-    print("\n" + "=" * 80)
-    print("[Example 2] Verify Models are Cached Locally")
-    print("-" * 80)
-    
-    print(f"\nChecking cache directory: {TEXT_MODEL_CACHE_DIR}")
-    
-    cached_items = list_cached_text_models()
-    cache_size = get_text_cache_size()
-    
-    print(f"\nCached items: {len(cached_items)}")
-    if cached_items:
-        for item in cached_items[:5]:
-            print(f"  ✓ {item}")
-        if len(cached_items) > 5:
-            print(f"  ... and {len(cached_items) - 5} more")
-        print(f"\nTotal cache size: {cache_size:.2f} MB")
-        print(f"\n✓ Models are now cached locally in: {TEXT_MODEL_CACHE_DIR}")
-        print("  Next time you run the code, models will load from cache (much faster!)")
-    else:
-        print("  (No models cached - this shouldn't happen after Example 1)")
-    
-    
-    # ------------------------------------------------------------------------
-    # Example 3: Using with Real Tokenizer
-    # ------------------------------------------------------------------------
-    print("\n" + "=" * 80)
-    print("[Example 3] Integration with Real Tokenizer")
-    print("-" * 80)
-    
-    try:
-        print("Loading tokenizer and model...")
-        print("(Tokenizer will also be cached locally)")
+        # Test with real tokenizer
+        print("\n[Test 4] Integration with Tokenizer")
+        print("-" * 80)
         
-        tokenizer = load_tokenizer("bert-base-uncased")
-        text_module = TextModule(
-            encoder_name="bert-base-uncased",
-            out_features=512,
-            freeze=False
-        )
-        print("✓ Loaded successfully\n")
+        tokenizer = load_tokenizer("distilbert-base-uncased")
         
-        # Example texts
         texts = [
-            "This is a great example of text processing.",
-            "The model extracts meaningful features from text.",
-            "BERT understands context and semantics."
+            "This is a great product!",
+            "I'm not happy with this purchase.",
+            "The quality is average."
         ]
         
-        print("Input texts:")
-        for i, text in enumerate(texts, 1):
-            print(f"  {i}. {text}")
-        
-        # Tokenize texts
-        print("\nTokenizing...")
         encoded = tokenizer(
             texts,
             padding=True,
             truncation=True,
-            max_length=128,
+            max_length=64,
             return_tensors="pt"
         )
         
-        print(f"Tokenized shapes:")
-        print(f"  - input_ids: {encoded['input_ids'].shape}")
-        print(f"  - attention_mask: {encoded['attention_mask'].shape}")
+        print(f"Tokenized {len(texts)} texts")
+        print(f"  input_ids shape: {encoded['input_ids'].shape}")
+        print(f"  attention_mask shape: {encoded['attention_mask'].shape}")
         
-        # Extract features
-        print("\nExtracting features...")
         with torch.no_grad():
             features = text_module(
                 encoded['input_ids'],
-                attention_mask=encoded['attention_mask']
+                encoded['attention_mask']
             )
         
-        print(f"✓ Features extracted. Shape: {features.shape}")
+        print(f"✓ Extracted features shape: {features.shape}")
         
-        # Compute similarity between texts
-        print("\nComputing pairwise cosine similarity:")
-        from torch.nn.functional import cosine_similarity
+        # Cache info
+        print("\n[Test 5] Cache Information")
+        print("-" * 80)
         
-        for i in range(len(texts)):
-            for j in range(i + 1, len(texts)):
-                sim = cosine_similarity(
-                    features[i].unsqueeze(0),
-                    features[j].unsqueeze(0)
-                ).item()
-                print(f"  Text {i+1} ↔ Text {j+1}: {sim:.4f}")
+        cache_info = text_module.get_cache_info()
+        print(f"  Cache directory: {cache_info['cache_dir']}")
+        print(f"  Cache exists: {cache_info['exists']}")
+        print(f"  Cached items: {len(cache_info['cached_items'])}")
+        print(f"  Total size: {cache_info['total_size_mb']:.2f} MB")
         
-        # Show updated cache info
-        print("\nUpdated cache information:")
-        cache_size = get_text_cache_size()
-        print(f"  Total cache size: {cache_size:.2f} MB")
-        
-    except ImportError:
-        print("✗ transformers library not available for this example")
-    except Exception as e:
-        print(f"✗ Error: {str(e)}")
-    
-    
-    # ------------------------------------------------------------------------
-    # Example 4: Different Encoder Architectures
-    # ------------------------------------------------------------------------
-    print("\n" + "=" * 80)
-    print("[Example 4] Different Encoder Architectures")
-    print("-" * 80)
-    
-    try:
-        # Test just one lightweight model to save time
-        encoder = "distilbert-base-uncased"
-        
-        print(f"Testing {encoder}...")
-        print("(This will download if not cached)\n")
-        
-        module = TextModule(
-            encoder_name=encoder,
-            out_features=512,
-            freeze=True
-        )
-        
-        # Count parameters
-        total_params = sum(p.numel() for p in module.parameters())
-        
-        # Test forward pass
-        input_ids = torch.randint(0, 1000, (2, 64))
-        with torch.no_grad():
-            features = module(input_ids)
-        
-        print(f"\n✓ {encoder}:")
-        print(f"  - Parameters: {total_params:,}")
-        print(f"  - Output shape: {features.shape}")
-        
-        # Show cache growth
-        print(f"\nCache size after loading {encoder}:")
-        cache_size = get_text_cache_size()
-        print(f"  Total: {cache_size:.2f} MB")
+        print("\n" + "=" * 80)
+        print("✓ All tests passed!")
+        print("=" * 80)
         
     except Exception as e:
-        print(f"✗ Error: {str(e)}")
-    
-    
-    # ------------------------------------------------------------------------
-    # Summary with Cache Information
-    # ------------------------------------------------------------------------
-    print("\n" + "=" * 80)
-    print("MODEL CACHE SUMMARY")
-    print("=" * 80)
-    
-    print(f"""
-Cache Directory: {TEXT_MODEL_CACHE_DIR}
-
-Structure:
-  downloaded_models/
-    └── text_models/
-        ├── models--bert-base-uncased/
-        ├── models--distilbert-base-uncased/
-        └── ... (other models and tokenizers)
-
-Current Status:
-  - Cached items: {len(list_cached_text_models())}
-  - Total size: {get_text_cache_size():.2f} MB
-
-Helper Functions:
-  1. get_text_model_cache_directory() - Get cache directory path
-  2. list_cached_text_models() - List all cached items
-  3. get_text_cache_size() - Get total cache size in MB
-  4. clear_text_model_cache(confirm=True) - Delete all cached models
-  5. load_tokenizer(name) - Load tokenizer with caching
-
-Usage:
-  # Check what's cached
-  >>> cached = list_cached_text_models()
-  >>> print(f"Cached items: {{cached}}")
-  
-  # Get cache size
-  >>> size = get_text_cache_size()
-  >>> print(f"Cache size: {{size:.2f}} MB")
-  
-  # Load tokenizer (will be cached)
-  >>> tokenizer = load_tokenizer("bert-base-uncased")
-  
-  # Clear cache (be careful!)
-  >>> clear_text_model_cache(confirm=True)
-
-Environment Variables Set:
-  - TRANSFORMERS_CACHE = {TEXT_MODEL_CACHE_DIR}
-  - HF_HOME = {TEXT_MODEL_CACHE_DIR}
-  - HF_HUB_CACHE = {TEXT_MODEL_CACHE_DIR}
-
-Notes:
-  - Models and tokenizers are downloaded only once
-  - Subsequent runs load from cache (much faster)
-  - Cache persists between runs
-  - Can be shared across different scripts in the same directory
-  - Safe to delete - models will re-download if needed
-  - HuggingFace models are typically larger than vision models (200MB - 1GB+)
-    """)
-    
-    print("=" * 80)
-    print("End of Examples")
-    print("=" * 80)
+        print(f"\n✗ Error: {e}")
+        import traceback
+        traceback.print_exc()

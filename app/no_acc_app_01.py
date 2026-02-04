@@ -37,7 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image
 
-from app.predict import predict, IMAGE_UPLOAD_DIR
+from app.old_predict import predict, IMAGE_UPLOAD_DIR
 from utils.path import LOG_DIR
 
 

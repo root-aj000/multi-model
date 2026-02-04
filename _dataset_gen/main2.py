@@ -18,7 +18,7 @@ import urllib.parse
 
 # ===================== CONFIG =====================
 # Use Path for cross-platform compatibility
-BASE_DIR = Path("_dataset_gen")
+BASE_DIR = Path(__file__).parent
 CSV_FILE = BASE_DIR / "main.csv"
 OUTPUT_CSV = BASE_DIR / "processed" / "Ads_with_images.csv"
 OUTPUT_FOLDER = BASE_DIR / "dataset" / "images"

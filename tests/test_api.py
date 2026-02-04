@@ -23,7 +23,17 @@ class TestAPI(unittest.TestCase):
     def test_health_check(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok", "message": "API is running"})
+        
+        data = response.json()
+        
+        # FIX: Check specific keys instead of the whole dictionary
+        # because 'timestamp' and 'uptime' change dynamically.
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(data["message"], "API is running")
+        
+        # Verify the extra fields exist (optional)
+        self.assertIn("timestamp", data)
+        self.assertIn("model_loaded", data)
 
     def test_predict_endpoint(self):
         # Open the image in binary mode

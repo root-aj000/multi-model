@@ -1,273 +1,746 @@
+"""
+Prediction Module for Multi-Modal Classification
+=================================================
+This module handles the complete prediction pipeline:
+1. OCR text extraction (supports EasyOCR and PaddleOCR)
+2. Image preprocessing
+3. Model inference
+4. Feature extraction (keywords, prices, CTAs)
+5. Result formatting
 
+Features:
+- Dual OCR support (EasyOCR as primary, PaddleOCR as fallback)
+- All models cached locally in ./local/predict/
+- Lazy model loading for fast server startup
+- Batch processing for efficiency
+- Comprehensive error handling
+- Detailed logging
+
+Author: [Your Name]
+Date: [Date]
+"""
 
 import os
 import re
 import json
 import logging
 import traceback
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
+from enum import Enum
+from pathlib import Path
 
 import torch
 import numpy as np
 from PIL import Image
 from torchvision import transforms
 
+
 # ============================================================================
-# SUPPRESS WARNINGS AND SETUP LOGGING
+# DIRECTORY SETUP - All downloads go to ./local/predict/
+# ============================================================================
+
+# Get project root directory (where this script's parent's parent is)
+SCRIPT_DIR = Path(__file__).parent  # app/
+PROJECT_ROOT = SCRIPT_DIR.parent     # project root
+
+# Create local cache directories
+LOCAL_DIR = PROJECT_ROOT / "local"
+PREDICT_CACHE_DIR = LOCAL_DIR / "predict"
+
+# Subdirectories for different components
+EASYOCR_CACHE_DIR = PREDICT_CACHE_DIR / "easyocr_models"
+PADDLEOCR_CACHE_DIR = PREDICT_CACHE_DIR / "paddleocr_models"
+TORCH_CACHE_DIR = PREDICT_CACHE_DIR / "torch_cache"
+# Create temp directory for OCR
+TEMP_DIR = PREDICT_CACHE_DIR / "temp"
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# Create all directories
+for dir_path in [LOCAL_DIR, PREDICT_CACHE_DIR, EASYOCR_CACHE_DIR, PADDLEOCR_CACHE_DIR, TORCH_CACHE_DIR]:
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+# Set environment variables BEFORE importing libraries
+# This ensures all downloads go to our local directories
+
+# EasyOCR cache
+os.environ['EASYOCR_MODULE_PATH'] = str(EASYOCR_CACHE_DIR)
+
+# PaddleOCR/PaddleX cache
+os.environ['PADDLE_HOME'] = str(PADDLEOCR_CACHE_DIR)
+os.environ['PADDLEX_HOME'] = str(PADDLEOCR_CACHE_DIR)
+os.environ['HUB_HOME'] = str(PADDLEOCR_CACHE_DIR)
+
+# PyTorch cache (for any torch hub downloads)
+os.environ['TORCH_HOME'] = str(TORCH_CACHE_DIR)
+
+# HuggingFace cache (if used)
+os.environ['HF_HOME'] = str(PREDICT_CACHE_DIR / "huggingface")
+os.environ['TRANSFORMERS_CACHE'] = str(PREDICT_CACHE_DIR / "huggingface")
+
+
+# ============================================================================
+# SUPPRESS WARNINGS
 # ============================================================================
 
 import warnings
-
-
-
-# Suppress all warnings
-warnings.filterwarnings('ignore')
-
-# Suppress TensorFlow warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 0=all, 1=info, 2=warning, 3=error
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN custom ops
-
-# Suppress torchvision warnings
 import sys
+
+warnings.filterwarnings('ignore')
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['PADDLE_LOG_LEVEL'] = '0'  # Suppress Paddle logs
+os.environ['GLOG_v'] = '0'
+
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
 
-# Configure logging to only show ERROR level and above for specific libraries
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-logging.getLogger('tensorboard').setLevel(logging.ERROR)
-logging.getLogger('torch').setLevel(logging.ERROR)
-logging.getLogger('torchvision').setLevel(logging.ERROR)
 
-# PaddleOCR for text extraction
-try:
-    from paddlex import create_pipeline
-    PADDLEX_AVAILABLE = True
-except ImportError:
-    PADDLEX_AVAILABLE = False
-    logging.warning("PaddleX not available. OCR functionality will be limited.")
-
-from preprocessing.text_preprocessing import tokenize_text
-from models.fg_mfn import FG_MFN, ATTRIBUTE_NAMES
-from utils.path import SAVED_MODEL_PATH, MODEL_CONFIG
-
-
-# =============================================================================
+# ============================================================================
 # LOGGING CONFIGURATION
-# =============================================================================
+# ============================================================================
 
-# Configure logging for debugging and monitoring
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+# Suppress noisy loggers
+for noisy_logger in ['tensorflow', 'tensorboard', 'torch', 'torchvision', 
+                      'paddle', 'paddlex', 'ppocr', 'matplotlib']:
+    logging.getLogger(noisy_logger).setLevel(logging.ERROR)
 
-# =============================================================================
+
+# ============================================================================
+# LOG CACHE DIRECTORIES
+# ============================================================================
+
+logger.info("=" * 80)
+logger.info("PREDICTION MODULE - Cache Configuration")
+logger.info("=" * 80)
+logger.info(f"Project Root: {PROJECT_ROOT}")
+logger.info(f"Cache Directory: {PREDICT_CACHE_DIR}")
+logger.info(f"  └── EasyOCR Models: {EASYOCR_CACHE_DIR}")
+logger.info(f"  └── PaddleOCR Models: {PADDLEOCR_CACHE_DIR}")
+logger.info(f"  └── Torch Cache: {TORCH_CACHE_DIR}")
+logger.info("=" * 80)
+
+
+# ============================================================================
+# OCR ENGINE DETECTION AND IMPORTS
+# ============================================================================
+
+class OCREngine(Enum):
+    """Available OCR engines."""
+    NONE = "none"
+    EASYOCR = "easyocr"
+    PADDLEOCR = "paddleocr"
+
+
+# Detect available OCR engines
+EASYOCR_AVAILABLE = False
+PADDLEOCR_AVAILABLE = False
+
+# Try importing EasyOCR
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+    logger.info("✓ EasyOCR available")
+    logger.info(f"  Models will be cached in: {EASYOCR_CACHE_DIR}")
+except ImportError:
+    logger.info(" EasyOCR not installed (pip install easyocr)")
+
+# Try importing PaddleOCR
+try:
+    from paddlex import create_pipeline
+    PADDLEOCR_AVAILABLE = True
+    logger.info("✓ PaddleOCR available")
+    logger.info(f"  Models will be cached in: {PADDLEOCR_CACHE_DIR}")
+except ImportError:
+    logger.info("ℹ PaddleOCR not installed (pip install paddlex[ocr])")
+
+# Determine default OCR engine
+if EASYOCR_AVAILABLE:
+    DEFAULT_OCR_ENGINE = OCREngine.EASYOCR
+    logger.info("Using EasyOCR as primary OCR engine")
+elif PADDLEOCR_AVAILABLE:
+    DEFAULT_OCR_ENGINE = OCREngine.PADDLEOCR
+    logger.info("Using PaddleOCR as primary OCR engine")
+else:
+    DEFAULT_OCR_ENGINE = OCREngine.NONE
+    logger.warning("=" * 80)
+    logger.warning("⚠ NO OCR ENGINE AVAILABLE")
+    logger.warning("Install one of the following:")
+    logger.warning("  pip install easyocr          (Recommended, easier)")
+    logger.warning("  pip install paddlex[ocr]     (Alternative)")
+    logger.warning("=" * 80)
+
+
+# ============================================================================
+# IMPORT PROJECT MODULES
+# ============================================================================
+
+try:
+    from preprocessing.text_preprocessing import tokenize_text
+    from models.fg_mfn import FG_MFN, ATTRIBUTE_NAMES
+    from utils.path import SAVED_MODEL_PATH, MODEL_CONFIG, IMAGE_UPLOAD_DIR
+except ImportError as e:
+    logger.error(f"Failed to import project modules: {e}")
+    logger.error("Make sure you're running from the project root directory")
+    raise
+
+
+# ============================================================================
 # CONFIGURATION AND CONSTANTS
-# =============================================================================
+# ============================================================================
 
 # Path configurations
-MODEL_PATH = SAVED_MODEL_PATH           # Path to saved model weights
-MODEL_CONFIG_PATH = MODEL_CONFIG         # Path to model configuration
-IMAGE_UPLOAD_DIR = "data/images/tmp_uploads/"  # Temporary upload directory
+MODEL_PATH = SAVED_MODEL_PATH
+MODEL_CONFIG_PATH = MODEL_CONFIG
 
 # Processing hyperparameters
-BATCH_SIZE = 16          # Number of images to process at once
-                         # Larger = faster but needs more memory
-                         # Smaller = slower but safer
+BATCH_SIZE = 16
+IMAGE_SIZE = (224, 224)
+MAX_TEXT_LEN = 128
 
-IMAGE_SIZE = (224, 224)  # Input size for the model (height, width)
-                         # ResNet expects 224x224 images
-
-MAX_TEXT_LEN = 128       # Maximum text sequence length
-                         # Should match training configuration
-
-# Device configuration - use GPU if available
+# Device configuration
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 logger.info("=" * 80)
-logger.info("PREDICTION SERVER CONFIGURATION")
+logger.info("PREDICTION MODULE CONFIGURATION")
 logger.info("=" * 80)
 logger.info(f"Device: {DEVICE}")
+if DEVICE == "cuda":
+    logger.info(f"  GPU: {torch.cuda.get_device_name(0)}")
+    logger.info(f"  Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 logger.info(f"Batch Size: {BATCH_SIZE}")
 logger.info(f"Image Size: {IMAGE_SIZE}")
 logger.info(f"Model Path: {MODEL_PATH}")
-logger.info(f"Config Path: {MODEL_CONFIG_PATH}")
+logger.info(f"OCR Engine: {DEFAULT_OCR_ENGINE.value}")
 logger.info("=" * 80)
 
 
-# =============================================================================
+# ============================================================================
 # IMAGE PREPROCESSING
-# =============================================================================
+# ============================================================================
 
-# Image transformation pipeline
-# This converts PIL images to tensors and normalizes them
-# The normalization values are ImageNet statistics (standard for ResNet)
 transform = transforms.Compose([
-    # Step 1: Resize image to model's expected size
     transforms.Resize(IMAGE_SIZE),
-    
-    # Step 2: Convert PIL image to PyTorch tensor
-    # This converts from (H, W, C) to (C, H, W) format
-    # and scales pixel values from [0, 255] to [0, 1]
     transforms.ToTensor(),
-    
-    # Step 3: Normalize with ImageNet statistics
-    # mean and std are per-channel (R, G, B)
-    # This helps the model generalize better
     transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],  # ImageNet mean
-        std=[0.229, 0.224, 0.225]     # ImageNet std
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
     )
 ])
 
 
-# =============================================================================
-# GLOBAL VARIABLES
-# =============================================================================
+# ============================================================================
+# GLOBAL STATE
+# ============================================================================
 
-# Configuration dictionary - loaded from JSON
-CFG = {}
+# Configuration
+CFG: Dict[str, Any] = {}
 
-# Model instance - lazy loaded on first prediction
-# This allows the server to start faster
-model = None
+# Model instance (lazy loaded)
+model: Optional[FG_MFN] = None
 
-# OCR model - lazy loaded when needed
-ocr_model = None
+# Label mappings
+LABEL_MAPS: Dict[str, List[str]] = {}
 
-# Label mappings - attribute names to human-readable labels
-LABEL_MAPS = {}
+# Global OCR manager
+ocr_manager: Optional['OCRManager'] = None
 
 
-# =============================================================================
+# ============================================================================
+# OCR MANAGER CLASS
+# ============================================================================
+
+class OCRManager:
+    """
+    Manages OCR engines with automatic fallback and local caching.
+    
+    All models are downloaded to:
+    - EasyOCR: ./local/predict/easyocr_models/
+    - PaddleOCR: ./local/predict/paddleocr_models/
+    
+    Supports:
+    - EasyOCR (primary, easier to install)
+    - PaddleOCR (fallback, more accurate for some cases)
+    
+    Usage:
+        ocr = OCRManager()
+        text, confidence = ocr.extract_text(image)
+    """
+    
+    def __init__(
+        self,
+        preferred_engine: OCREngine = DEFAULT_OCR_ENGINE,
+        languages: List[str] = ['en'],
+        gpu: bool = None
+    ):
+        """
+        Initialize OCR manager.
+        
+        Args:
+            preferred_engine: Preferred OCR engine to use
+            languages: List of language codes for OCR
+            gpu: Use GPU if available (None = auto-detect)
+        """
+        self.preferred_engine = preferred_engine
+        self.languages = languages
+        self.use_gpu = gpu if gpu is not None else torch.cuda.is_available()
+        
+        self.easyocr_reader = None
+        self.paddleocr_pipeline = None
+        self._initialized = False
+        
+        # Cache directories
+        self.easyocr_model_dir = EASYOCR_CACHE_DIR
+        self.paddleocr_model_dir = PADDLEOCR_CACHE_DIR
+        
+        logger.info(f"OCR Manager created")
+        logger.info(f"  Preferred engine: {preferred_engine.value}")
+        logger.info(f"  Languages: {languages}")
+        logger.info(f"  GPU: {self.use_gpu}")
+    
+    def initialize(self) -> bool:
+        """
+        Initialize the OCR engine(s).
+        
+        Returns:
+            bool: True if at least one engine initialized successfully
+        """
+        if self._initialized:
+            return True
+        
+        success = False
+        
+        # Try to initialize preferred engine first
+        if self.preferred_engine == OCREngine.EASYOCR:
+            if self._init_easyocr():
+                success = True
+            elif self._init_paddleocr():
+                success = True
+                logger.info("Falling back to PaddleOCR")
+        
+        elif self.preferred_engine == OCREngine.PADDLEOCR:
+            if self._init_paddleocr():
+                success = True
+            elif self._init_easyocr():
+                success = True
+                logger.info("Falling back to EasyOCR")
+        
+        else:
+            # Try both
+            success = self._init_easyocr() or self._init_paddleocr()
+        
+        self._initialized = success
+        
+        if success:
+            logger.info("✓ OCR Manager initialized successfully")
+        else:
+            logger.warning("⚠ OCR Manager initialization failed")
+        
+        return success
+    
+    def _init_easyocr(self) -> bool:
+        """Initialize EasyOCR reader with local model storage."""
+        if not EASYOCR_AVAILABLE:
+            return False
+        
+        try:
+            logger.info(f"Initializing EasyOCR...")
+            logger.info(f"  Languages: {self.languages}")
+            logger.info(f"  Model directory: {self.easyocr_model_dir}")
+            logger.info(f"  GPU: {self.use_gpu}")
+            
+            # Check if models already cached
+            cached_models = list(self.easyocr_model_dir.glob("*.pth")) + \
+                           list(self.easyocr_model_dir.glob("*.pt")) + \
+                           list(self.easyocr_model_dir.glob("*.zip"))
+            
+            if cached_models:
+                logger.info(f"  Found {len(cached_models)} cached model file(s)")
+            else:
+                logger.info("  No cached models found - will download on first use")
+            
+            # Initialize EasyOCR with custom model storage directory
+            self.easyocr_reader = easyocr.Reader(
+                self.languages,
+                gpu=self.use_gpu,
+                model_storage_directory=str(self.easyocr_model_dir),
+                download_enabled=True,  # Allow downloading
+                verbose=False
+            )
+            
+            # Check models after initialization
+            cached_models = list(self.easyocr_model_dir.glob("*.pth")) + \
+                           list(self.easyocr_model_dir.glob("*.pt"))
+            logger.info(f"✓ EasyOCR initialized successfully")
+            logger.info(f"  Cached models: {len(cached_models)}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize EasyOCR: {e}")
+            logger.error(traceback.format_exc())
+            return False
+    
+    def _init_paddleocr(self) -> bool:
+        """Initialize PaddleOCR pipeline with local model storage."""
+        if not PADDLEOCR_AVAILABLE:
+            return False
+        
+        try:
+            logger.info(f"Initializing PaddleOCR...")
+            logger.info(f"  Model directory: {self.paddleocr_model_dir}")
+            
+            # Check if models already cached
+            cached_items = list(self.paddleocr_model_dir.iterdir()) if self.paddleocr_model_dir.exists() else []
+            
+            if cached_items:
+                logger.info(f"  Found {len(cached_items)} cached item(s)")
+            else:
+                logger.info("  No cached models found - will download on first use")
+            
+            # Initialize PaddleOCR
+            # PaddleX uses PADDLEX_HOME environment variable for caching
+            self.paddleocr_pipeline = create_pipeline(pipeline="ocr")
+            
+            logger.info("✓ PaddleOCR initialized successfully")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize PaddleOCR: {e}")
+            logger.error("You may need to install: pip install paddlex[ocr]")
+            return False
+    
+    def extract_text(
+        self,
+        image: Union[Image.Image, np.ndarray, str],
+        use_engine: Optional[OCREngine] = None
+    ) -> Tuple[str, float]:
+        """
+        Extract text from image using OCR.
+        
+        Args:
+            image: PIL Image, numpy array, or path to image file
+            use_engine: Specific engine to use (optional)
+        
+        Returns:
+            tuple: (extracted_text, average_confidence)
+        """
+        # Initialize if needed
+        if not self._initialized:
+            if not self.initialize():
+                logger.warning("No OCR engine available")
+                return "", 0.0
+        
+        # Determine which engine to use
+        engine = use_engine or self.preferred_engine
+        
+        # Try preferred engine first, then fallback
+        if engine == OCREngine.EASYOCR and self.easyocr_reader is not None:
+            result = self._extract_with_easyocr(image)
+            if result[0]:  # If text was extracted
+                return result
+            # Try fallback
+            if self.paddleocr_pipeline is not None:
+                logger.debug("EasyOCR returned empty, trying PaddleOCR")
+                return self._extract_with_paddleocr(image)
+            return result
+        
+        elif engine == OCREngine.PADDLEOCR and self.paddleocr_pipeline is not None:
+            result = self._extract_with_paddleocr(image)
+            if result[0]:
+                return result
+            # Try fallback
+            if self.easyocr_reader is not None:
+                logger.debug("PaddleOCR returned empty, trying EasyOCR")
+                return self._extract_with_easyocr(image)
+            return result
+        
+        # Use whatever is available
+        if self.easyocr_reader is not None:
+            return self._extract_with_easyocr(image)
+        elif self.paddleocr_pipeline is not None:
+            return self._extract_with_paddleocr(image)
+        
+        logger.warning("No OCR engine initialized")
+        return "", 0.0
+    
+    def _extract_with_easyocr(
+        self,
+        image: Union[Image.Image, np.ndarray, str]
+    ) -> Tuple[str, float]:
+        """Extract text using EasyOCR."""
+        try:
+            # Convert to numpy array
+            if isinstance(image, Image.Image):
+                image_array = np.array(image)
+            elif isinstance(image, str):
+                if not os.path.exists(image):
+                    logger.error(f"Image file not found: {image}")
+                    return "", 0.0
+                image_array = np.array(Image.open(image))
+            else:
+                image_array = image
+            
+            # Run OCR
+            results = self.easyocr_reader.readtext(image_array)
+            
+            if not results:
+                return "", 0.0
+            
+            # Extract text and confidences
+            texts = [r[1] for r in results]
+            confidences = [r[2] for r in results]
+            
+            # Join texts and calculate average confidence
+            extracted_text = " ".join(texts)
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+            
+            logger.debug(f"EasyOCR: '{extracted_text[:50]}...' (conf: {avg_confidence:.3f})")
+            
+            return extracted_text, avg_confidence
+            
+        except Exception as e:
+            logger.error(f"EasyOCR extraction failed: {e}")
+            return "", 0.0
+    
+    def _extract_with_paddleocr(
+        self,
+        image: Union[Image.Image, np.ndarray, str]
+    ) -> Tuple[str, float]:
+        """Extract text using PaddleOCR."""
+        try:
+            import tempfile
+            
+            # Convert to file path (PaddleOCR requires file path)
+            temp_file = None
+            
+            if isinstance(image, Image.Image):
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False, 
+                    suffix=".png",
+                    dir=str(PREDICT_CACHE_DIR / "temp")
+                )
+                # Ensure temp directory exists
+                (PREDICT_CACHE_DIR / "temp").mkdir(exist_ok=True)
+                image.save(temp_file.name)
+                image_path = temp_file.name
+                
+            elif isinstance(image, str):
+                if not os.path.exists(image):
+                    logger.error(f"Image file not found: {image}")
+                    return "", 0.0
+                image_path = image
+                
+            else:
+                # numpy array
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False, 
+                    suffix=".png",
+                    dir=str(PREDICT_CACHE_DIR / "temp")
+                )
+                (PREDICT_CACHE_DIR / "temp").mkdir(exist_ok=True)
+                Image.fromarray(image).save(temp_file.name)
+                image_path = temp_file.name
+            
+            try:
+                # Run OCR
+                result = list(self.paddleocr_pipeline.predict(image_path))
+                
+                if not result or not isinstance(result[0], dict):
+                    return "", 0.0
+                
+                # Extract texts and scores
+                texts = result[0].get("rec_texts", [])
+                scores = result[0].get("rec_scores", [])
+                
+                if not texts:
+                    return "", 0.0
+                
+                # Join texts and calculate average confidence
+                extracted_text = " ".join(texts)
+                avg_confidence = sum(scores) / len(scores) if scores else 0.0
+                
+                logger.debug(f"PaddleOCR: '{extracted_text[:50]}...' (conf: {avg_confidence:.3f})")
+                
+                return extracted_text, avg_confidence
+                
+            finally:
+                # Clean up temp file
+                if temp_file is not None:
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
+            
+        except Exception as e:
+            logger.error(f"PaddleOCR extraction failed: {e}")
+            return "", 0.0
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get OCR manager status."""
+        # Get cache sizes
+        easyocr_size = self._get_dir_size(self.easyocr_model_dir)
+        paddleocr_size = self._get_dir_size(self.paddleocr_model_dir)
+        
+        return {
+            "initialized": self._initialized,
+            "preferred_engine": self.preferred_engine.value,
+            "languages": self.languages,
+            "gpu": self.use_gpu,
+            "easyocr": {
+                "available": EASYOCR_AVAILABLE,
+                "initialized": self.easyocr_reader is not None,
+                "cache_dir": str(self.easyocr_model_dir),
+                "cache_size_mb": easyocr_size
+            },
+            "paddleocr": {
+                "available": PADDLEOCR_AVAILABLE,
+                "initialized": self.paddleocr_pipeline is not None,
+                "cache_dir": str(self.paddleocr_model_dir),
+                "cache_size_mb": paddleocr_size
+            }
+        }
+    
+    def _get_dir_size(self, path: Path) -> float:
+        """Get directory size in MB."""
+        try:
+            total = 0
+            for item in path.rglob('*'):
+                if item.is_file():
+                    total += item.stat().st_size
+            return round(total / (1024 * 1024), 2)
+        except:
+            return 0.0
+    
+    def clear_cache(self, engine: Optional[str] = None, confirm: bool = False) -> bool:
+        """
+        Clear cached OCR models.
+        
+        Args:
+            engine: 'easyocr', 'paddleocr', or None (both)
+            confirm: Must be True to actually delete
+        
+        Returns:
+            bool: True if cache was cleared
+        """
+        if not confirm:
+            logger.warning("clear_cache() requires confirm=True")
+            return False
+        
+        import shutil
+        
+        try:
+            if engine is None or engine.lower() == 'easyocr':
+                if self.easyocr_model_dir.exists():
+                    shutil.rmtree(self.easyocr_model_dir)
+                    self.easyocr_model_dir.mkdir(parents=True)
+                    logger.info(f"✓ Cleared EasyOCR cache")
+                    self.easyocr_reader = None
+            
+            if engine is None or engine.lower() in ('paddleocr', 'paddle'):
+                if self.paddleocr_model_dir.exists():
+                    shutil.rmtree(self.paddleocr_model_dir)
+                    self.paddleocr_model_dir.mkdir(parents=True)
+                    logger.info(f"✓ Cleared PaddleOCR cache")
+                    self.paddleocr_pipeline = None
+            
+            self._initialized = False
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to clear cache: {e}")
+            return False
+
+
+# ============================================================================
+# GLOBAL OCR MANAGER ACCESSOR
+# ============================================================================
+
+def get_ocr_manager() -> OCRManager:
+    """Get or create the global OCR manager instance."""
+    global ocr_manager
+    
+    if ocr_manager is None:
+        ocr_manager = OCRManager(
+            preferred_engine=DEFAULT_OCR_ENGINE,
+            languages=['en']
+        )
+    
+    return ocr_manager
+
+
+# ============================================================================
 # INITIALIZATION FUNCTIONS
-# =============================================================================
+# ============================================================================
 
 def _load_config() -> Dict[str, Any]:
-    """
-    Load model configuration from JSON file.
-    
-    This is an internal initialization function that loads the
-    model architecture configuration needed for inference.
-    
-    Returns:
-        dict: Model configuration dictionary
-    
-    Note:
-        This function is called automatically during module import.
-        Errors are logged but don't crash the module.
-    """
+    """Load model configuration from JSON file."""
     try:
         logger.info("Loading model configuration...")
         
-        # Check if config file exists
         if not os.path.exists(MODEL_CONFIG_PATH):
             logger.warning(f"Config file not found: {MODEL_CONFIG_PATH}")
-            logger.warning("Using default empty configuration")
             return {}
         
-        # Load JSON file
         with open(MODEL_CONFIG_PATH, "r") as f:
             cfg = json.load(f)
         
-        logger.info("✓ Configuration loaded successfully")
-        logger.info(f"  - Attributes defined: {list(cfg.get('ATTRIBUTES', {}).keys())}")
+        logger.info("✓ Configuration loaded")
+        attrs = list(cfg.get('ATTRIBUTES', {}).keys())
+        logger.info(f"  Attributes: {attrs}")
         
         return cfg
         
     except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in config file: {str(e)}")
-        logger.warning("Using default empty configuration")
+        logger.error(f"Invalid JSON in config: {e}")
         return {}
-        
     except Exception as e:
-        logger.error(f"Failed to load config: {str(e)}")
-        logger.error(traceback.format_exc())
-        logger.warning("Using default empty configuration")
+        logger.error(f"Failed to load config: {e}")
         return {}
 
 
-def _initialize_ocr() -> Optional[Any]:
-    """
-    Initialize OCR model for text extraction.
-    
-    This function creates the PaddleOCR pipeline for extracting
-    text from images. OCR is loaded lazily to avoid startup delays.
-    
-    Returns:
-        OCR pipeline instance or None if unavailable
-    
-    Note:
-        If PaddleX is not installed, this returns None and OCR
-        functionality will be disabled.
-    """
-    global ocr_model
-    
-    # Return existing instance if already loaded
-    if ocr_model is not None:
-        return ocr_model
-    
-    # Check if PaddleX is available
-    if not PADDLEX_AVAILABLE:
-        logger.warning("PaddleX not available. OCR disabled.")
-        return None
-    
+def get_label_maps() -> Dict[str, List[str]]:
+    """Get label mappings for all attributes."""
     try:
-        logger.info("Initializing OCR model...")
+        label_maps = {}
+        attributes = CFG.get("ATTRIBUTES", {})
         
-        # Create OCR pipeline
-        # This may download model weights on first run
-        ocr_model = create_pipeline(pipeline="ocr")
+        for attr_name, attr_config in attributes.items():
+            labels = attr_config.get("labels", [])
+            label_maps[attr_name] = labels
         
-        logger.info("✓ OCR model initialized successfully")
-        return ocr_model
+        return label_maps
         
     except Exception as e:
-        logger.error(f"Failed to initialize OCR model: {str(e)}")
-        logger.error(traceback.format_exc())
-        logger.warning("OCR functionality will be disabled")
-        return None
+        logger.error(f"Failed to extract label maps: {e}")
+        return {}
 
 
-# Load configuration during module import
+# Load configuration and label maps
 CFG = _load_config()
+LABEL_MAPS = get_label_maps()
 
 
-# =============================================================================
+# ============================================================================
 # MODEL LOADING
-# =============================================================================
+# ============================================================================
 
 def load_model() -> FG_MFN:
     """
     Load the trained FG_MFN model (lazy loading).
     
-    This function loads the model only when first needed, not during
-    module import. This makes the server start faster. Subsequent calls
-    return the cached model instance.
-    
     Returns:
         FG_MFN: Loaded model in evaluation mode
-    
-    Raises:
-        RuntimeError: If model loading fails critically
-    
-    Example:
-        >>> model = load_model()
-        >>> # First call loads model
-        >>> model = load_model()
-        >>> # Second call returns cached instance
-    
-    Note:
-        The model is automatically set to evaluation mode (model.eval())
-        which disables dropout and batch normalization training behavior.
     """
     global model
     
-    # Step 1: Return cached model if already loaded
     if model is not None:
-        logger.debug("Using cached model instance")
         return model
     
     try:
@@ -275,201 +748,56 @@ def load_model() -> FG_MFN:
         logger.info("Loading FG_MFN Model")
         logger.info("=" * 80)
         
-        # Step 2: Validate configuration
-        if not CFG:
-            logger.warning("Empty configuration. Model may not work correctly.")
+        # Create model
+        loaded_model = FG_MFN(CFG).to(DEVICE)
         
-        # Step 3: Create model architecture
-        logger.info("Creating model architecture...")
+        total_params = sum(p.numel() for p in loaded_model.parameters())
+        trainable = sum(p.numel() for p in loaded_model.parameters() if p.requires_grad)
+        logger.info(f"Model: {total_params:,} params ({trainable:,} trainable)")
         
-        try:
-            loaded_model = FG_MFN(CFG).to(DEVICE)
-            logger.info("✓ Model architecture created")
-            
-            # Log model details
-            total_params = sum(p.numel() for p in loaded_model.parameters())
-            logger.info(f"  - Total parameters: {total_params:,}")
-            logger.info(f"  - Attribute heads: {list(loaded_model.attribute_heads.keys())}")
-            
-        except Exception as e:
-            error_msg = f"Failed to create model architecture: {str(e)}"
-            logger.error(error_msg)
-            logger.error(traceback.format_exc())
-            raise RuntimeError(error_msg)
-        
-        # Step 4: Load trained weights
+        # Load weights
         if os.path.exists(MODEL_PATH):
-            logger.info(f"Loading weights from: {MODEL_PATH}")
-            
-            try:
-                # Load state dictionary
-                # map_location ensures weights are loaded to correct device
-                state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
-                loaded_model.load_state_dict(state_dict)
-                logger.info("✓ Weights loaded successfully")
-                
-            except Exception as e:
-                logger.error(f"Failed to load weights: {str(e)}")
-                logger.error(traceback.format_exc())
-                logger.warning("⚠ Using randomly initialized weights!")
-                logger.warning("Model predictions will be meaningless!")
+            logger.info(f"Loading weights: {MODEL_PATH}")
+            state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
+            loaded_model.load_state_dict(state_dict)
+            logger.info("✓ Weights loaded")
         else:
-            logger.warning(f"Model checkpoint not found: {MODEL_PATH}")
-            logger.warning("⚠ Using randomly initialized weights!")
-            logger.warning("Model predictions will be meaningless!")
+            logger.warning(f"⚠ Checkpoint not found: {MODEL_PATH}")
+            logger.warning("Using random weights!")
         
-        # Step 5: Set model to evaluation mode
-        # This disables dropout and sets batch norm to use running stats
         loaded_model.eval()
-        logger.info("✓ Model set to evaluation mode")
-        
-        # Step 6: Cache the model for future use
         model = loaded_model
         
-        logger.info("=" * 80)
-        logger.info("Model Loading Complete")
+        logger.info("✓ Model ready")
         logger.info("=" * 80)
         
         return model
         
     except Exception as e:
-        # If loading fails, try to return a model with random weights
-        # This prevents the server from crashing completely
-        logger.error(f"Critical error loading model: {str(e)}")
+        logger.error(f"Model loading failed: {e}")
         logger.error(traceback.format_exc())
-        logger.warning("Attempting to create model with random weights as fallback...")
         
+        # Fallback
         try:
             loaded_model = FG_MFN(CFG).to(DEVICE)
             loaded_model.eval()
             model = loaded_model
-            logger.warning("✓ Fallback model created (with random weights)")
+            logger.warning("✓ Fallback model created (random weights)")
             return model
-            
         except Exception as fallback_error:
-            error_msg = f"Failed to create fallback model: {str(fallback_error)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            raise RuntimeError(f"Failed to create model: {fallback_error}")
 
 
-def get_label_maps() -> Dict[str, List[str]]:
-    """
-    Get label mappings for all attributes.
-    
-    This function extracts human-readable label names from the
-    configuration. These are used to convert predicted class indices
-    to meaningful text labels.
-    
-    Returns:
-        dict: Mapping from attribute names to lists of label names
-              Format: {
-                  'sentiment': ['negative', 'neutral', 'positive'],
-                  'emotion': ['happy', 'sad', 'angry', 'surprised'],
-                  ...
-              }
-    
-    Example:
-        >>> label_maps = get_label_maps()
-        >>> print(label_maps['sentiment'])
-        ['negative', 'neutral', 'positive']
-        
-        >>> # Convert predicted index to label
-        >>> predicted_index = 2
-        >>> label = label_maps['sentiment'][predicted_index]
-        >>> print(label)  # 'positive'
-    
-    Note:
-        If an attribute doesn't have labels defined in the config,
-        it will have an empty list in the returned dictionary.
-    """
-    try:
-        logger.debug("Extracting label mappings from configuration...")
-        
-        # Initialize empty dictionary
-        label_maps = {}
-        
-        # Get attributes from configuration
-        # ATTRIBUTES is a dict: {attr_name: {num_classes: X, labels: [...]}}
-        attributes = CFG.get("ATTRIBUTES", {})
-        
-        if not attributes:
-            logger.warning("No attributes defined in configuration")
-            logger.warning("Label mapping will be empty")
-            return label_maps
-        
-        # Extract labels for each attribute
-        for attr_name, attr_config in attributes.items():
-            # Get the labels list, default to empty list if not found
-            labels = attr_config.get("labels", [])
-            label_maps[attr_name] = labels
-            
-            logger.debug(f"  {attr_name}: {len(labels)} labels")
-        
-        logger.debug(f"✓ Extracted label maps for {len(label_maps)} attributes")
-        return label_maps
-        
-    except Exception as e:
-        logger.error(f"Failed to extract label maps: {str(e)}")
-        logger.error(traceback.format_exc())
-        logger.warning("Returning empty label maps")
-        return {}
-
-
-# Initialize label maps during module import
-LABEL_MAPS = get_label_maps()
-
-
-# =============================================================================
+# ============================================================================
 # TEXT EXTRACTION UTILITIES
-# =============================================================================
+# ============================================================================
 
 def extract_keywords(text: str) -> str:
-    """
-    Extract important keywords from text.
+    """Extract important keywords from text."""
+    if not text or not isinstance(text, str):
+        return ""
     
-    This function identifies and extracts meaningful keywords from
-    the input text by:
-    1. Removing common stopwords (the, a, is, etc.)
-    2. Extracting words 3+ characters long
-    3. Removing duplicates while preserving order
-    4. Capitalizing for consistency
-    5. Limiting to top 5 keywords
-    
-    Args:
-        text (str): Input text to extract keywords from
-    
-    Returns:
-        str: Space-separated keywords (up to 5)
-             Returns empty string if no keywords found
-    
-    Example:
-        >>> text = "Buy the best smartphone at amazing discount today"
-        >>> keywords = extract_keywords(text)
-        >>> print(keywords)
-        'Buy Best Smartphone Amazing Discount'
-        
-        >>> text = "The a is and"  # All stopwords
-        >>> keywords = extract_keywords(text)
-        >>> print(keywords)
-        ''
-    
-    Note:
-        This is a simple keyword extraction method. For production,
-        consider using more sophisticated NLP techniques like TF-IDF
-        or named entity recognition (NER).
-    """
     try:
-        # Step 1: Validate input
-        if not text:
-            logger.debug("Empty text provided for keyword extraction")
-            return ""
-        
-        if not isinstance(text, str):
-            logger.warning(f"Expected string, got {type(text)}. Converting...")
-            text = str(text)
-        
-        # Step 2: Define stopwords
-        # These are common words that don't carry much meaning
         stopwords = {
             "the", "a", "an", "is", "are", "and", "or", "to", "for",
             "of", "in", "on", "at", "with", "your", "you", "we",
@@ -477,996 +805,504 @@ def extract_keywords(text: str) -> str:
             "was", "were", "been", "have", "has", "had", "do", "does"
         }
         
-        # Step 3: Extract words using regex
-        # \b = word boundary
-        # [A-Za-z]{3,} = alphabetic characters, 3 or more
         words = re.findall(r"\b[A-Za-z]{3,}\b", text)
+        keywords = [w.capitalize() for w in words if w.lower() not in stopwords]
         
-        logger.debug(f"Extracted {len(words)} words from text")
-        
-        # Step 4: Filter out stopwords and capitalize
-        # Capitalize makes keywords look more professional
-        keywords = [
-            word.capitalize() 
-            for word in words 
-            if word.lower() not in stopwords
-        ]
-        
-        # Step 5: Remove duplicates while preserving order
-        # Using a set to track what we've seen
         seen = set()
-        unique_keywords = []
+        unique = []
+        for w in keywords:
+            if w.lower() not in seen:
+                seen.add(w.lower())
+                unique.append(w)
         
-        for word in keywords:
-            # Use lowercase for comparison to catch duplicates
-            # like "Phone" and "phone"
-            word_lower = word.lower()
-            
-            if word_lower not in seen:
-                seen.add(word_lower)
-                unique_keywords.append(word)
-        
-        # Step 6: Limit to top 5 keywords
-        # First 5 are usually the most relevant
-        top_keywords = unique_keywords[:5]
-        
-        # Step 7: Join with spaces
-        result = " ".join(top_keywords)
-        
-        logger.debug(f"Extracted keywords: '{result}'")
-        return result
+        return " ".join(unique[:5])
         
     except Exception as e:
-        logger.error(f"Error extracting keywords: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Keyword extraction error: {e}")
         return ""
 
 
 def extract_monetary_mention(text: str) -> str:
-    """
-    Extract price, discount, or promotional information from text.
+    """Extract price, discount, or promotional information."""
+    if not text or not isinstance(text, str):
+        return "None"
     
-    This function searches for monetary mentions like:
-    - Discounts: "50% OFF", "30% discount"
-    - Prices: "$99.99", "Rs. 1,999", "₹500"
-    - Free offers: "FREE shipping"
-    
-    Args:
-        text (str): Input text to search
-    
-    Returns:
-        str: First monetary mention found, or "None" if nothing found
-    
-    Example:
-        >>> text = "Get 50% OFF on iPhone today!"
-        >>> mention = extract_monetary_mention(text)
-        >>> print(mention)
-        '50% OFF'
-        
-        >>> text = "Price: $99.99"
-        >>> mention = extract_monetary_mention(text)
-        >>> print(mention)
-        '$99.99'
-        
-        >>> text = "No price mentioned"
-        >>> mention = extract_monetary_mention(text)
-        >>> print(mention)
-        'None'
-    
-    Note:
-        Patterns are checked in order. First match wins.
-        Add more patterns as needed for different formats.
-    """
     try:
-        # Step 1: Validate input
-        if not text:
-            logger.debug("Empty text for monetary extraction")
-            return "None"
-        
-        if not isinstance(text, str):
-            logger.warning(f"Expected string, got {type(text)}. Converting...")
-            text = str(text)
-        
-        # Step 2: Define regex patterns for different monetary mentions
-        # Order matters - more specific patterns first
         patterns = [
-            # Pattern 1: Percentage discounts
-            # Matches: "50% OFF", "30% discount", "20% off"
             r"\d+%\s*(?:OFF|off|discount|Discount|DISCOUNT)",
-            
-            # Pattern 2: Currency amounts
-            # Matches: "Rs. 1,999", "$99.99", "₹500", "INR 1000"
-            r"(?:Rs\.?|INR|USD|\$|₹)\s*\d+(?:,\d{3})*(?:\.\d{2})?",
-            
-            # Pattern 3: Free offers
-            # Matches: "FREE", "Free shipping"
+            r"(?:Rs\.?|INR|USD|\$|€|£|₹)\s*\d+(?:,\d{3})*(?:\.\d{2})?",
             r"(?:FREE|Free|free)(?:\s+\w+)?",
+            r"\d+(?:\.\d{2})?\s*(?:dollars?|USD|EUR|GBP)",
         ]
         
-        # Step 3: Try each pattern
         for pattern in patterns:
             match = re.search(pattern, text)
-            
             if match:
-                # Found a match!
-                result = match.group(0)
-                logger.debug(f"Found monetary mention: '{result}'")
-                return result
+                return match.group(0)
         
-        # Step 4: No matches found
-        logger.debug("No monetary mention found in text")
         return "None"
         
-    except Exception as e:
-        logger.error(f"Error extracting monetary mention: {str(e)}")
-        logger.error(traceback.format_exc())
+    except Exception:
         return "None"
 
 
 def extract_call_to_action(text: str) -> str:
-    """
-    Extract call-to-action (CTA) phrases from text.
+    """Extract call-to-action (CTA) phrases."""
+    if not text or not isinstance(text, str):
+        return "None"
     
-    CTAs are phrases that encourage the user to take action:
-    - "Buy Now", "Shop Today", "Order Now"
-    - "Limited Offer", "Hurry", "Act Now"
-    
-    Args:
-        text (str): Input text to search
-    
-    Returns:
-        str: First CTA found, or "None" if nothing found
-    
-    Example:
-        >>> text = "Buy Now and save 50%!"
-        >>> cta = extract_call_to_action(text)
-        >>> print(cta)
-        'Buy Now'
-        
-        >>> text = "Limited Offer - Shop Today"
-        >>> cta = extract_call_to_action(text)
-        >>> print(cta)
-        'Limited Offer'
-        
-        >>> text = "Just an advertisement"
-        >>> cta = extract_call_to_action(text)
-        >>> print(cta)
-        'None'
-    
-    Note:
-        Case-insensitive matching is used to catch variations
-        like "buy now", "Buy Now", "BUY NOW".
-    """
     try:
-        # Step 1: Validate input
-        if not text:
-            logger.debug("Empty text for CTA extraction")
-            return "None"
-        
-        if not isinstance(text, str):
-            logger.warning(f"Expected string, got {type(text)}. Converting...")
-            text = str(text)
-        
-        # Step 2: Define CTA patterns
         patterns = [
-            # Pattern 1: Action verbs with optional time modifier
-            # Matches: "Buy Now", "Shop Today", "Order", "Get it"
-            r"(?:Buy|Shop|Order|Get|Grab|Claim)\s*(?:Now|Today|it)?",
-            
-            # Pattern 2: Urgency phrases
-            # Matches: "Limited Offer", "Hurry Up", "Act Now"
-            r"(?:Limited\s*Offer|Hurry|Act\s*Now|Don't\s*Miss)",
+            r"(?:Buy|Shop|Order|Get|Grab|Claim|Download|Subscribe|Sign\s*Up)\s*(?:Now|Today|Here|it)?",
+            r"(?:Limited\s*(?:Time\s*)?Offer|Hurry|Act\s*Now|Don't\s*Miss|Last\s*Chance)",
+            r"(?:Learn|Find\s*Out|Discover)\s*More",
         ]
         
-        # Step 3: Try each pattern (case-insensitive)
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
-            
             if match:
-                # Found a CTA!
-                result = match.group(0)
-                logger.debug(f"Found CTA: '{result}'")
-                return result
+                return match.group(0)
         
-        # Step 4: No CTA found
-        logger.debug("No call-to-action found in text")
         return "None"
         
-    except Exception as e:
-        logger.error(f"Error extracting CTA: {str(e)}")
-        logger.error(traceback.format_exc())
+    except Exception:
         return "None"
 
 
 def extract_objects_mentioned(text: str) -> str:
-    """
-    Detect product categories or objects mentioned in text.
+    """Detect product categories mentioned in text."""
+    if not text or not isinstance(text, str):
+        return "Unknown"
     
-    This function identifies what products or items are mentioned:
-    - Electronics: phone, laptop, computer
-    - Food & Beverage: burger, coffee, drink
-    - Clothing: shirt, dress, jeans
-    
-    Args:
-        text (str): Input text to analyze
-    
-    Returns:
-        str: Comma-separated list of detected categories
-             Returns "General" if no specific category detected
-             Returns "Unknown" if text is empty
-    
-    Example:
-        >>> text = "Buy the latest iPhone and laptop"
-        >>> objects = extract_objects_mentioned(text)
-        >>> print(objects)
-        'Phone, Laptop'
-        
-        >>> text = "Get your burger and coffee here"
-        >>> objects = extract_objects_mentioned(text)
-        >>> print(objects)
-        'Food'
-        
-        >>> text = "Amazing product available"
-        >>> objects = extract_objects_mentioned(text)
-        >>> print(objects)
-        'General'
-    
-    Note:
-        This uses a simple keyword matching approach. For better
-        results, consider using named entity recognition (NER) or
-        a trained product classifier.
-    """
     try:
-        # Step 1: Validate input
-        if not text:
-            logger.debug("Empty text for object detection")
-            return "Unknown"
-        
-        if not isinstance(text, str):
-            logger.warning(f"Expected string, got {type(text)}. Converting...")
-            text = str(text)
-        
-        # Step 2: Define category mappings
-        # Each category has a regex pattern for keywords
-        category_mapping = {
-            "Phone": r"\b(phone|iphone|smartphone|mobile|android)\b",
+        categories = {
+            "Phone": r"\b(phone|iphone|smartphone|mobile|android|samsung)\b",
             "Laptop": r"\b(laptop|computer|pc|notebook|macbook)\b",
-            "Food": r"\b(food|burger|pizza|sandwich|meal|coffee|drink|beverage)\b",
-            "Clothing": r"\b(shirt|dress|jeans|pants|clothes|apparel|fashion)\b",
-            "Electronics": r"\b(tv|television|camera|headphone|speaker)\b",
+            "Food": r"\b(food|burger|pizza|coffee|drink|restaurant)\b",
+            "Clothing": r"\b(shirt|dress|jeans|clothes|fashion|shoes)\b",
+            "Electronics": r"\b(tv|camera|headphone|speaker|tablet)\b",
             "Beauty": r"\b(makeup|cosmetic|perfume|skincare|beauty)\b",
+            "Travel": r"\b(travel|flight|hotel|vacation|booking)\b",
+            "Finance": r"\b(loan|credit|bank|insurance|invest)\b",
         }
         
-        # Step 3: Search for each category
-        found_categories = []
-        text_lower = text.lower()  # Convert once for efficiency
+        found = []
+        text_lower = text.lower()
         
-        for category, pattern in category_mapping.items():
+        for cat, pattern in categories.items():
             if re.search(pattern, text_lower):
-                found_categories.append(category)
-                logger.debug(f"Detected category: {category}")
+                found.append(cat)
         
-        # Step 4: Return results
-        if found_categories:
-            # Found specific categories
-            result = ", ".join(found_categories)
-            logger.debug(f"Detected objects: {result}")
-            return result
-        else:
-            # No specific category detected
-            logger.debug("No specific category detected, using 'General'")
-            return "General"
+        return ", ".join(found) if found else "General"
         
-    except Exception as e:
-        logger.error(f"Error detecting objects: {str(e)}")
-        logger.error(traceback.format_exc())
+    except Exception:
         return "Unknown"
 
 
-# =============================================================================
-# OCR TEXT EXTRACTION
-# =============================================================================
+# ============================================================================
+# OCR WRAPPER FUNCTION
+# ============================================================================
 
-def extract_text(image: Any) -> Tuple[str, float]:
+def extract_text(
+    image: Union[Image.Image, np.ndarray, str],
+    engine: Optional[str] = None
+) -> Tuple[str, float]:
     """
     Extract text from image using OCR.
     
-    This function uses PaddleOCR to detect and recognize text in images.
-    It returns both the extracted text and a confidence score.
-    
     Args:
-        image: Input image, can be:
-               - PIL.Image.Image object
-               - str (file path)
-               - np.ndarray (image array)
+        image: PIL Image, numpy array, or path to image file
+        engine: Optional engine name ('easyocr' or 'paddleocr')
     
     Returns:
         tuple: (extracted_text, confidence_score)
-               - extracted_text (str): All detected text joined by spaces
-               - confidence_score (float): Average confidence (0.0 to 1.0)
-               
-               Returns ("", 0.0) if OCR fails or no text detected
-    
-    Example:
-        >>> from PIL import Image
-        >>> img = Image.open("ad_image.png")
-        >>> text, confidence = extract_text(img)
-        >>> print(f"Text: {text}")
-        Text: Buy Now 50% OFF
-        >>> print(f"Confidence: {confidence:.2f}")
-        Confidence: 0.95
-    
-    Note:
-        - If PaddleX is not installed, returns empty text
-        - Temporary files are created for PIL images
-        - Higher confidence = more reliable OCR results
     """
     try:
-        # Step 1: Check if OCR is available
-        ocr = _initialize_ocr()
+        ocr = get_ocr_manager()
         
-        if ocr is None:
-            logger.warning("OCR not available. Returning empty text.")
-            return "", 0.0
+        use_engine = None
+        if engine:
+            if engine.lower() == 'easyocr':
+                use_engine = OCREngine.EASYOCR
+            elif engine.lower() in ('paddleocr', 'paddle'):
+                use_engine = OCREngine.PADDLEOCR
         
-        # Step 2: Handle different image input types
-        image_path = None
-        temp_file = None
-        
-        if isinstance(image, Image.Image):
-            # PIL Image - save to temporary file
-            import tempfile
-            
-            logger.debug("Converting PIL Image to temporary file...")
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            image.save(temp_file.name)
-            image_path = temp_file.name
-            logger.debug(f"Saved to: {image_path}")
-            
-        elif isinstance(image, str):
-            # File path
-            if not os.path.exists(image):
-                logger.error(f"Image file not found: {image}")
-                return "", 0.0
-            image_path = image
-            logger.debug(f"Using image path: {image_path}")
-            
-        else:
-            # Assume it's a numpy array or similar
-            import tempfile
-            import cv2
-            
-            logger.debug("Converting array to temporary file...")
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            cv2.imwrite(temp_file.name, image)
-            image_path = temp_file.name
-            logger.debug(f"Saved to: {image_path}")
-        
-        # Step 3: Run OCR
-        logger.debug(f"Running OCR on: {image_path}")
-        
-        try:
-            # Predict returns a generator, convert to list
-            result = list(ocr.predict(image_path))
-            
-        except Exception as e:
-            logger.error(f"OCR prediction failed: {str(e)}")
-            logger.error(traceback.format_exc())
-            return "", 0.0
-        
-        finally:
-            # Clean up temporary file if created
-            if temp_file is not None:
-                try:
-                    os.unlink(temp_file.name)
-                    logger.debug("Cleaned up temporary file")
-                except:
-                    pass
-        
-        # Step 4: Extract text and scores from result
-        texts = []
-        scores = []
-        
-        if result and isinstance(result[0], dict):
-            # Result format: [{'rec_texts': [...], 'rec_scores': [...]}]
-            texts = result[0].get("rec_texts", [])
-            scores = result[0].get("rec_scores", [])
-            
-            logger.debug(f"OCR found {len(texts)} text regions")
-        else:
-            logger.debug("OCR returned no text")
-        
-        # Step 5: Calculate average confidence
-        avg_score = 0.0
-        if scores:
-            avg_score = sum(scores) / len(scores)
-            logger.debug(f"Average OCR confidence: {avg_score:.3f}")
-        
-        # Step 6: Join all text with spaces
-        extracted_text = " ".join(texts).strip()
-        
-        logger.debug(f"Extracted text: '{extracted_text}'")
-        
-        return extracted_text, avg_score
+        return ocr.extract_text(image, use_engine=use_engine)
         
     except Exception as e:
-        logger.error(f"Error in OCR text extraction: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error(f"OCR extraction failed: {e}")
         return "", 0.0
 
 
-# =============================================================================
+# ============================================================================
 # MAIN PREDICTION FUNCTION
-# =============================================================================
+# ============================================================================
 
-def predict(images: List[Any]) -> List[Dict[str, Any]]:
+def predict(
+    images: List[Any],
+    ocr_engine: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     Predict attributes for a list of images.
     
-    This is the main inference function. It:
-    1. Extracts text from images using OCR
-    2. Processes images and text through the model
-    3. Predicts multiple attributes (sentiment, emotion, etc.)
-    4. Extracts additional features (keywords, prices, CTAs)
-    5. Returns comprehensive results
-    
     Args:
-        images (list): List of images to process
-                      Each image can be:
-                      - PIL.Image.Image object
-                      - str (file path)
-                      - np.ndarray (image array)
+        images: List of images (PIL Image, path, or numpy array)
+        ocr_engine: Optional OCR engine ('easyocr' or 'paddleocr')
     
     Returns:
-        list: List of prediction dictionaries, one per image
-              Each dictionary contains:
-              {
-                  # OCR results
-                  'ocr_text': str,
-                  
-                  # Per-attribute predictions
-                  'sentiment': str,
-                  'sentiment_confidence': float,
-                  'emotion': str,
-                  'emotion_confidence': float,
-                  # ... (for all attributes)
-                  
-                  # Legacy fields (for backward compatibility)
-                  'predicted_label_text': str,
-                  'predicted_label_num': int,
-                  'confidence_score': float,
-                  
-                  # Extracted features
-                  'keywords': str,
-                  'monetary_mention': str,
-                  'call_to_action': str,
-                  'object_detected': str
-              }
-    
-    Example:
-        >>> from PIL import Image
-        >>> images = [Image.open("ad1.png"), Image.open("ad2.png")]
-        >>> results = predict(images)
-        >>> for i, result in enumerate(results):
-        ...     print(f"Image {i+1}:")
-        ...     print(f"  Sentiment: {result['sentiment']}")
-        ...     print(f"  OCR Text: {result['ocr_text']}")
-    
-    Raises:
-        RuntimeError: If prediction fails completely
-    
-    Note:
-        - Images are processed in batches for efficiency
-        - OCR is run on all images first
-        - Results maintain input order
-        - Empty images or OCR failures are handled gracefully
+        List of prediction dictionaries
     """
     try:
         logger.info("=" * 80)
         logger.info(f"Starting Prediction for {len(images)} Image(s)")
         logger.info("=" * 80)
         
-        # Step 1: Validate input
         if not images:
-            logger.warning("Empty image list provided")
             return []
         
         if not isinstance(images, list):
-            logger.warning(f"Expected list, got {type(images)}. Converting...")
             images = [images]
         
-        logger.info(f"Processing {len(images)} images in batches of {BATCH_SIZE}")
-        
-        # Step 2: Initialize results storage
         results = []
         
-        # Step 3: Extract text from all images using OCR
-        logger.info("\n[Step 1/4] Extracting text with OCR...")
+        # Step 1: Extract text with OCR
+        logger.info("\n[Step 1/3] OCR Text Extraction...")
+        
         ocr_texts = []
         ocr_confidences = []
         
         for idx, img in enumerate(images):
             try:
-                text, confidence = extract_text(img)
+                text, conf = extract_text(img, engine=ocr_engine)
                 ocr_texts.append(text)
-                ocr_confidences.append(confidence)
+                ocr_confidences.append(conf)
                 
-                logger.debug(f"  Image {idx+1}: '{text[:50]}...' (conf: {confidence:.3f})")
-                
+                if text:
+                    preview = text[:40] + "..." if len(text) > 40 else text
+                    logger.debug(f"  [{idx+1}] '{preview}' (conf: {conf:.2f})")
+                    
             except Exception as e:
-                logger.error(f"OCR failed for image {idx+1}: {str(e)}")
+                logger.error(f"OCR failed for image {idx+1}: {e}")
                 ocr_texts.append("")
                 ocr_confidences.append(0.0)
         
-        logger.info(f"✓ OCR complete. Average confidence: {np.mean(ocr_confidences):.3f}")
+        avg_conf = np.mean(ocr_confidences) if ocr_confidences else 0.0
+        logger.info(f"✓ OCR complete (avg conf: {avg_conf:.2f})")
         
-        # Step 4: Process images in batches
-        logger.info("\n[Step 2/4] Running model inference...")
+        # Step 2: Model Inference
+        logger.info("\n[Step 2/3] Model Inference...")
         
         num_batches = (len(images) + BATCH_SIZE - 1) // BATCH_SIZE
-        logger.info(f"Processing {num_batches} batch(es)...")
         
-        for batch_idx in range(0, len(images), BATCH_SIZE):
+        for batch_start in range(0, len(images), BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, len(images))
+            batch_imgs = images[batch_start:batch_end]
+            batch_texts = ocr_texts[batch_start:batch_end]
+            
+            batch_num = (batch_start // BATCH_SIZE) + 1
+            logger.info(f"  Batch {batch_num}/{num_batches} ({len(batch_imgs)} images)")
+            
             try:
-                # Step 4a: Get current batch
-                batch_end = min(batch_idx + BATCH_SIZE, len(images))
-                batch_imgs = images[batch_idx:batch_end]
-                batch_texts = ocr_texts[batch_idx:batch_end]
+                # Preprocess images
+                img_tensors = []
+                for img in batch_imgs:
+                    if not isinstance(img, Image.Image):
+                        if isinstance(img, str):
+                            img = Image.open(img)
+                        else:
+                            img = Image.fromarray(img)
+                    
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    
+                    img_tensors.append(transform(img))
                 
-                batch_num = (batch_idx // BATCH_SIZE) + 1
-                logger.info(f"\nProcessing batch {batch_num}/{num_batches} ({len(batch_imgs)} images)...")
+                img_tensor = torch.stack(img_tensors).to(DEVICE)
                 
-                # Step 4b: Preprocess images
-                logger.debug("  Preprocessing images...")
-                try:
-                    # Apply transforms to each image
-                    img_tensors = []
-                    for img in batch_imgs:
-                        # Ensure image is PIL Image
-                        if not isinstance(img, Image.Image):
-                            if isinstance(img, str):
-                                img = Image.open(img)
-                            else:
-                                # Assume numpy array
-                                img = Image.fromarray(img)
-                        
-                        # Convert to RGB if needed
-                        if img.mode != 'RGB':
-                            img = img.convert('RGB')
-                        
-                        # Apply transformation
-                        img_tensor = transform(img)
-                        img_tensors.append(img_tensor)
-                    
-                    # Stack into batch tensor
-                    img_tensor = torch.stack(img_tensors).to(DEVICE)
-                    logger.debug(f"  Image tensor shape: {img_tensor.shape}")
-                    
-                except Exception as e:
-                    error_msg = f"Image preprocessing failed: {str(e)}"
-                    logger.error(error_msg)
-                    logger.error(traceback.format_exc())
-                    # Skip this batch
-                    continue
+                # Tokenize text
+                tokens_list = [tokenize_text(t) for t in batch_texts]
+                text_ids = torch.stack([t["input_ids"] for t in tokens_list]).to(DEVICE)
+                masks = torch.stack([t["attention_mask"] for t in tokens_list]).to(DEVICE)
                 
-                # Step 4c: Tokenize text
-                logger.debug("  Tokenizing text...")
-                try:
-                    tokens_list = [tokenize_text(t) for t in batch_texts]
-                    
-                    # Stack tensors
-                    text_ids = torch.stack([t["input_ids"] for t in tokens_list]).to(DEVICE)
-                    masks = torch.stack([t["attention_mask"] for t in tokens_list]).to(DEVICE)
-                    
-                    logger.debug(f"  Text tensor shape: {text_ids.shape}")
-                    
-                except Exception as e:
-                    error_msg = f"Text tokenization failed: {str(e)}"
-                    logger.error(error_msg)
-                    logger.error(traceback.format_exc())
-                    # Skip this batch
-                    continue
+                # Run inference
+                model_instance = load_model()
                 
-                # Step 4d: Run model inference
-                logger.debug("  Running model forward pass...")
+                with torch.no_grad():
+                    outputs = model_instance(img_tensor, text_ids, attention_mask=masks)
                 
-                try:
-                    # Load model (lazy loading)
-                    model_instance = load_model()
-                    
-                    # Disable gradient computation (inference only)
-                    with torch.no_grad():
-                        outputs = model_instance(
-                            img_tensor,
-                            text_ids,
-                            attention_mask=masks
-                        )
-                    
-                    logger.debug(f"  Got predictions for {len(outputs)} attributes")
-                    
-                except Exception as e:
-                    error_msg = f"Model inference failed: {str(e)}"
-                    logger.error(error_msg)
-                    logger.error(traceback.format_exc())
-                    # Skip this batch
-                    continue
-                
-                # Step 4e: Process each image in batch
-                logger.debug("  Processing predictions...")
-                
+                # Process results
                 for j in range(len(batch_imgs)):
-                    try:
-                        # Initialize result dictionary for this image
-                        result = {
-                            "ocr_text": batch_texts[j]
-                        }
+                    result = {"ocr_text": batch_texts[j]}
+                    
+                    primary_label = None
+                    primary_idx = None
+                    primary_conf = None
+                    
+                    for attr in ATTRIBUTE_NAMES:
+                        if attr not in outputs:
+                            continue
                         
-                        # Track primary prediction for legacy compatibility
-                        primary_label = None
-                        primary_idx = None
-                        primary_conf = None
-                        
-                        # Process each attribute
-                        for attr in ATTRIBUTE_NAMES:
-                            # Check if this attribute has predictions
-                            if attr not in outputs:
-                                logger.debug(f"    Skipping {attr} - not in outputs")
-                                continue
+                        try:
+                            logits = outputs[attr][j]
+                            probs = torch.softmax(logits, dim=0)
+                            pred_idx = int(torch.argmax(probs))
+                            conf = float(torch.max(probs))
                             
-                            try:
-                                # Get logits for this sample
-                                logits = outputs[attr][j]
+                            labels = LABEL_MAPS.get(attr, [])
+                            label = labels[pred_idx] if pred_idx < len(labels) else str(pred_idx)
+                            
+                            result[attr] = label
+                            result[f"{attr}_confidence"] = round(conf, 4)
+                            
+                            if primary_label is None:
+                                primary_label = label
+                                primary_idx = pred_idx
+                                primary_conf = conf
                                 
-                                # Convert to probabilities
-                                probs = torch.softmax(logits, dim=0)
-                                
-                                # Get predicted class
-                                pred_idx = int(torch.argmax(probs))
-                                confidence = float(torch.max(probs))
-                                
-                                # Convert index to label name
-                                labels = LABEL_MAPS.get(attr, [])
-                                if pred_idx < len(labels):
-                                    label = labels[pred_idx]
-                                else:
-                                    # Fallback to numeric label
-                                    label = str(pred_idx)
-                                    logger.warning(f"    Label index {pred_idx} out of range for {attr}")
-                                
-                                # Store in result
-                                result[attr] = label
-                                result[f"{attr}_confidence"] = confidence
-                                
-                                logger.debug(f"    {attr}: {label} (conf: {confidence:.3f})")
-                                
-                                # Track first prediction as primary
-                                if primary_label is None:
-                                    primary_label = label
-                                    primary_idx = pred_idx
-                                    primary_conf = confidence
-                                
-                            except Exception as e:
-                                logger.error(f"    Error processing {attr}: {str(e)}")
-                                result[attr] = "Unknown"
-                                result[f"{attr}_confidence"] = 0.0
-                        
-                        # Step 4f: Add legacy fields for backward compatibility
-                        result["predicted_label_text"] = primary_label or "Unknown"
-                        result["predicted_label_num"] = primary_idx if primary_idx is not None else -1
-                        result["confidence_score"] = primary_conf if primary_conf else 0.0
-                        
-                        # Step 4g: Extract additional text features
-                        logger.debug("  Extracting text features...")
-                        
-                        result["keywords"] = extract_keywords(batch_texts[j])
-                        result["monetary_mention"] = extract_monetary_mention(batch_texts[j])
-                        result["call_to_action"] = extract_call_to_action(batch_texts[j])
-                        result["object_detected"] = extract_objects_mentioned(batch_texts[j])
-                        
-                        # Add result to list
-                        results.append(result)
-                        
-                    except Exception as e:
-                        logger.error(f"  Error processing image {j} in batch: {str(e)}")
-                        logger.error(traceback.format_exc())
-                        
-                        # Add default result to maintain order
-                        results.append({
-                            "ocr_text": batch_texts[j] if j < len(batch_texts) else "",
-                            "predicted_label_text": "Error",
-                            "predicted_label_num": -1,
-                            "confidence_score": 0.0,
-                            "keywords": "",
-                            "monetary_mention": "None",
-                            "call_to_action": "None",
-                            "object_detected": "Unknown"
-                        })
-                
-                logger.info(f"✓ Batch {batch_num} complete")
+                        except Exception as e:
+                            logger.error(f"Error processing {attr}: {e}")
+                            result[attr] = "Unknown"
+                            result[f"{attr}_confidence"] = 0.0
+                    
+                    # Legacy fields
+                    result["predicted_label_text"] = primary_label or "Unknown"
+                    result["predicted_label_num"] = primary_idx if primary_idx is not None else -1
+                    result["confidence_score"] = round(primary_conf, 4) if primary_conf else 0.0
+                    
+                    # Text features
+                    result["keywords"] = extract_keywords(batch_texts[j])
+                    result["monetary_mention"] = extract_monetary_mention(batch_texts[j])
+                    result["call_to_action"] = extract_call_to_action(batch_texts[j])
+                    result["object_detected"] = extract_objects_mentioned(batch_texts[j])
+                    
+                    results.append(result)
                 
             except Exception as e:
-                logger.error(f"Batch {batch_idx // BATCH_SIZE + 1} failed: {str(e)}")
+                logger.error(f"Batch {batch_num} failed: {e}")
                 logger.error(traceback.format_exc())
-                # Continue with next batch
-                continue
+                
+                # Add error results
+                for j in range(len(batch_imgs)):
+                    results.append({
+                        "ocr_text": batch_texts[j] if j < len(batch_texts) else "",
+                        "predicted_label_text": "Error",
+                        "predicted_label_num": -1,
+                        "confidence_score": 0.0,
+                        "error": str(e)
+                    })
         
-        # Step 5: Validate results
-        if len(results) != len(images):
-            logger.warning(f"Result count mismatch: {len(results)} results for {len(images)} images")
-        
-        # Step 6: Log summary
-        logger.info("\n[Step 3/4] Prediction Summary")
-        logger.info("-" * 80)
-        logger.info(f"Total images processed: {len(results)}")
+        # Step 3: Summary
+        logger.info("\n[Step 3/3] Summary")
+        logger.info(f"  Processed: {len(results)} images")
         
         if results:
-            # Calculate average confidence
-            avg_conf = np.mean([r.get("confidence_score", 0.0) for r in results])
-            logger.info(f"Average confidence: {avg_conf:.3f}")
-            
-            # Count predictions per attribute
-            for attr in ATTRIBUTE_NAMES:
-                count = sum(1 for r in results if attr in r)
-                if count > 0:
-                    logger.info(f"  {attr}: {count} predictions")
+            avg = np.mean([r.get("confidence_score", 0) for r in results])
+            logger.info(f"  Avg confidence: {avg:.2f}")
         
         logger.info("=" * 80)
-        logger.info(f"Prediction Complete! Returning {len(results)} Results")
+        logger.info(f"✓ Prediction Complete!")
         logger.info("=" * 80)
         
         return results
         
     except Exception as e:
-        error_msg = f"Prediction failed: {str(e)}"
-        logger.error(error_msg)
+        logger.error(f"Prediction failed: {e}")
         logger.error(traceback.format_exc())
-        raise RuntimeError(error_msg)
+        raise RuntimeError(f"Prediction failed: {e}")
 
 
-# =============================================================================
-# USAGE EXAMPLES AND DOCUMENTATION
-# =============================================================================
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def get_ocr_status() -> Dict[str, Any]:
+    """Get current OCR engine status."""
+    return get_ocr_manager().get_status()
+
+
+def set_ocr_engine(engine: str) -> bool:
+    """Set the preferred OCR engine."""
+    global ocr_manager
+    
+    if engine.lower() == 'easyocr':
+        if not EASYOCR_AVAILABLE:
+            logger.error("EasyOCR not installed")
+            return False
+        ocr_manager = OCRManager(OCREngine.EASYOCR)
+        return True
+    
+    elif engine.lower() in ('paddleocr', 'paddle'):
+        if not PADDLEOCR_AVAILABLE:
+            logger.error("PaddleOCR not installed")
+            return False
+        ocr_manager = OCRManager(OCREngine.PADDLEOCR)
+        return True
+    
+    logger.error(f"Unknown engine: {engine}")
+    return False
+
+
+def get_cache_info() -> Dict[str, Any]:
+    """Get information about cached models."""
+    def get_size(path: Path) -> float:
+        try:
+            total = sum(f.stat().st_size for f in path.rglob('*') if f.is_file())
+            return round(total / (1024 * 1024), 2)
+        except:
+            return 0.0
+    
+    def count_files(path: Path) -> int:
+        try:
+            return sum(1 for f in path.rglob('*') if f.is_file())
+        except:
+            return 0
+    
+    return {
+        "cache_root": str(PREDICT_CACHE_DIR),
+        "easyocr": {
+            "path": str(EASYOCR_CACHE_DIR),
+            "size_mb": get_size(EASYOCR_CACHE_DIR),
+            "files": count_files(EASYOCR_CACHE_DIR)
+        },
+        "paddleocr": {
+            "path": str(PADDLEOCR_CACHE_DIR),
+            "size_mb": get_size(PADDLEOCR_CACHE_DIR),
+            "files": count_files(PADDLEOCR_CACHE_DIR)
+        },
+        "torch": {
+            "path": str(TORCH_CACHE_DIR),
+            "size_mb": get_size(TORCH_CACHE_DIR),
+            "files": count_files(TORCH_CACHE_DIR)
+        },
+        "total_size_mb": (
+            get_size(EASYOCR_CACHE_DIR) + 
+            get_size(PADDLEOCR_CACHE_DIR) + 
+            get_size(TORCH_CACHE_DIR)
+        )
+    }
+
+
+def clear_cache(engine: Optional[str] = None, confirm: bool = False) -> bool:
+    """
+    Clear cached OCR models.
+    
+    Args:
+        engine: 'easyocr', 'paddleocr', or None (all)
+        confirm: Must be True to actually delete
+    
+    Returns:
+        bool: True if cleared successfully
+    """
+    return get_ocr_manager().clear_cache(engine, confirm)
+
+
+# ============================================================================
+# TEST AND EXAMPLES
+# ============================================================================
 
 if __name__ == "__main__":
-    """
-    Example usage and test cases for the prediction server.
-    """
-    
     print("=" * 80)
-    print("PREDICTION SERVER - Usage Examples")
+    print("PREDICTION MODULE - Test Suite")
     print("=" * 80)
     
-    # Example 1: Single Image Prediction
-    print("\n[Example 1] Single Image Prediction")
+    # Test 1: Cache Info
+    print("\n[Test 1] Cache Information")
+    print("-" * 80)
+    cache_info = get_cache_info()
+    print(f"  Cache Root: {cache_info['cache_root']}")
+    print(f"  EasyOCR: {cache_info['easyocr']['size_mb']} MB ({cache_info['easyocr']['files']} files)")
+    print(f"  PaddleOCR: {cache_info['paddleocr']['size_mb']} MB ({cache_info['paddleocr']['files']} files)")
+    print(f"  Total: {cache_info['total_size_mb']} MB")
+    
+    # Test 2: OCR Status
+    print("\n[Test 2] OCR Status")
+    print("-" * 80)
+    status = get_ocr_status()
+    print(f"  Preferred Engine: {status['preferred_engine']}")
+    print(f"  EasyOCR: {'✓' if status['easyocr']['available'] else '✗'} available, "
+          f"{'✓' if status['easyocr']['initialized'] else '✗'} initialized")
+    print(f"  PaddleOCR: {'✓' if status['paddleocr']['available'] else '✗'} available, "
+          f"{'✓' if status['paddleocr']['initialized'] else '✗'} initialized")
+    
+    # Test 3: Prediction
+    print("\n[Test 3] Prediction Test")
     print("-" * 80)
     
     try:
-        from PIL import Image
-        import numpy as np
-        
-        # Create a dummy image
-        dummy_img = Image.new('RGB', (224, 224), color='red')
-        
-        # Run prediction
+        dummy_img = Image.new('RGB', (224, 224), color='white')
         results = predict([dummy_img])
         
-        print(f"Prediction result:")
-        for key, value in results[0].items():
-            print(f"  {key}: {value}")
-        
+        print("  Result keys:")
+        for key in sorted(results[0].keys()):
+            if not key.endswith('_confidence'):
+                value = results[0][key]
+                if isinstance(value, str) and len(value) > 30:
+                    value = value[:30] + "..."
+                print(f"    {key}: {value}")
+                
     except Exception as e:
-        print(f"Error: {str(e)}")
-    
-    # Example 2: Batch Prediction
-    print("\n[Example 2] Batch Prediction")
-    print("-" * 80)
-    
-    try:
-        # Create multiple dummy images
-        images = [
-            Image.new('RGB', (224, 224), color='red'),
-            Image.new('RGB', (224, 224), color='blue'),
-            Image.new('RGB', (224, 224), color='green')
-        ]
-        
-        # Run batch prediction
-        results = predict(images)
-        
-        print(f"Processed {len(results)} images")
-        for i, result in enumerate(results):
-            print(f"\nImage {i+1}:")
-            print(f"  Primary prediction: {result['predicted_label_text']}")
-            print(f"  Confidence: {result['confidence_score']:.3f}")
-    
-    except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"  Error: {e}")
     
     print("\n" + "=" * 80)
-    print("FUNCTION SUMMARY")
+    print("✓ Tests Complete")
     print("=" * 80)
     
     print("""
-    1. load_model()
-       Purpose: Lazy load the trained model
-       Use Cases:
-         - First prediction call loads model
-         - Subsequent calls use cached instance
-         - Allows fast server startup
-       
-       Example:
-         model = load_model()
-    
-    
-    2. get_label_maps()
-       Purpose: Extract label names from configuration
-       Use Cases:
-         - Convert predicted indices to text labels
-         - Map class numbers to human-readable names
-       
-       Example:
-         labels = get_label_maps()
-         sentiment_label = labels['sentiment'][predicted_idx]
-    
-    
-    3. extract_keywords(text)
-       Purpose: Extract important keywords from text
-       Use Cases:
-         - Identify main topics in OCR text
-         - Generate text summaries
-         - Feature extraction for analysis
-       
-       Example:
-         text = "Buy the best smartphone today"
-         keywords = extract_keywords(text)
-         # Returns: "Buy Best Smartphone Today"
-    
-    
-    4. extract_monetary_mention(text)
-       Purpose: Find price/discount information
-       Use Cases:
-         - Detect promotional offers
-         - Extract pricing information
-         - Identify discount mentions
-       
-       Example:
-         text = "Get 50% OFF on all items"
-         mention = extract_monetary_mention(text)
-         # Returns: "50% OFF"
-    
-    
-    5. extract_call_to_action(text)
-       Purpose: Identify CTA phrases
-       Use Cases:
-         - Detect action-oriented text
-         - Identify urgency markers
-         - Classify ad intent
-       
-       Example:
-         text = "Buy Now before stock runs out"
-         cta = extract_call_to_action(text)
-         # Returns: "Buy Now"
-    
-    
-    6. extract_objects_mentioned(text)
-       Purpose: Detect product categories
-       Use Cases:
-         - Classify product types
-         - Identify advertised items
-         - Categorize content
-       
-       Example:
-         text = "Latest iPhone and MacBook deals"
-         objects = extract_objects_mentioned(text)
-         # Returns: "Phone, Laptop"
-    
-    
-    7. extract_text(image)
-       Purpose: OCR text extraction from images
-       Use Cases:
-         - Read text from advertisement images
-         - Extract information from graphics
-         - Digitize image content
-       
-       Returns:
-         tuple: (text, confidence)
-       
-       Example:
-         img = Image.open("ad.png")
-         text, conf = extract_text(img)
-    
-    
-    8. predict(images)
-       Purpose: Main prediction function
-       Use Cases:
-         - Predict multiple attributes from images
-         - Batch process multiple images
-         - Generate comprehensive results
-       
-       Returns:
-         list: List of result dictionaries
-       
-       Example:
-         images = [img1, img2, img3]
-         results = predict(images)
-         for result in results:
-             print(result['sentiment'])
-    
-    
-    TYPICAL API WORKFLOW:
-    ====================
-    
-    1. Receive image(s) from client
-    2. Call predict(images)
-    3. Get results with all predictions
-    4. Return JSON response to client
-    
-    Example Flask endpoint:
-    
-    @app.route('/predict', methods=['POST'])
-    def predict_endpoint():
-        # Get uploaded images
-        files = request.files.getlist('images')
-        images = [Image.open(f) for f in files]
-        
-        # Run prediction
-        results = predict(images)
-        
-        # Return JSON
-        return jsonify(results)
-    
-    
-    RESULT FORMAT:
-    ==============
-    
-    Each prediction result contains:
-    
-    {
-        // OCR Results
-        "ocr_text": "Buy Now 50% OFF",
-        
-        // Multi-Attribute Predictions
-        "sentiment": "positive",
-        "sentiment_confidence": 0.95,
-        "emotion": "excited",
-        "emotion_confidence": 0.87,
-        "theme": "sales",
-        "theme_confidence": 0.92,
-        
-        // Legacy Fields (for backward compatibility)
-        "predicted_label_text": "positive",
-        "predicted_label_num": 2,
-        "confidence_score": 0.95,
-        
-        // Extracted Features
-        "keywords": "Buy Now Discount",
-        "monetary_mention": "50% OFF",
-        "call_to_action": "Buy Now",
-        "object_detected": "General"
-    }
-    
-    
-    ERROR HANDLING:
-    ===============
-    
-    The module handles errors gracefully:
-    
-    - Missing model file: Uses random weights (logs warning)
-    - OCR failure: Returns empty text
-    - Invalid image: Skips and continues
-    - Batch failure: Continues with next batch
-    - Missing config: Uses defaults
-    
-    
-    PERFORMANCE TIPS:
-    =================
-    
-    1. Use batch processing for multiple images
-    2. Adjust BATCH_SIZE based on GPU memory
-    3. Model is loaded once and cached
-    4. OCR is the slowest step (consider caching)
-    5. Use GPU for faster inference
+
+CACHE STRUCTURE
+===============
+
+./local/predict/
+├── easyocr_models/      # EasyOCR models (~100-300 MB per language)
+│   ├── craft_mlt_25k.pth
+│   ├── english_g2.pth
+│   └── ...
+├── paddleocr_models/    # PaddleOCR models
+│   └── ...
+├── torch_cache/         # PyTorch hub cache
+│   └── ...
+└── temp/               # Temporary files (auto-cleaned)
+
+
+USAGE
+=====
+
+# Basic prediction
+>>> from app.predict import predict
+>>> results = predict([image1, image2])
+
+# With specific OCR engine
+>>> results = predict([image], ocr_engine='easyocr')
+>>> results = predict([image], ocr_engine='paddleocr')
+
+# Direct OCR
+>>> from app.predict import extract_text
+>>> text, confidence = extract_text(image)
+
+# Check status
+>>> from app.predict import get_ocr_status, get_cache_info
+>>> print(get_ocr_status())
+>>> print(get_cache_info())
+
+# Change engine
+>>> from app.predict import set_ocr_engine
+>>> set_ocr_engine('paddleocr')
+
+# Clear cache
+>>> from app.predict import clear_cache
+>>> clear_cache('easyocr', confirm=True)
+
+
+INSTALLATION
+============
+
+For EasyOCR (recommended):
+    pip install easyocr
+
+For PaddleOCR:
+    pip install paddlex[ocr]
+
+For both:
+    pip install easyocr paddlex[ocr]
+
     """)
-    
-    print("=" * 80)
-    print("End of Examples")
-    print("=" * 80)

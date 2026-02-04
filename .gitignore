@@ -2,12 +2,12 @@ __pycache__
 logs/
 saved_models/
 
-aj
 .next
 node_modules
 local
 csv
 csv_kiwi
 csv_main
-temp/
-temp_images/
+aj
+venv_notebook
+venv_datagen

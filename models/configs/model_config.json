@@ -1,6 +1,6 @@
 {
-  "IMAGE_BACKBONE": "resnet50",
-  "TEXT_ENCODER": "bert-base-uncased",
+  "IMAGE_BACKBONE": "resnet18",
+  "TEXT_ENCODER": "distilbert-base-uncased",
   "FUSION_TYPE": "concat",
   "DROPOUT": 0.3,
   "HIDDEN_DIM": 512,

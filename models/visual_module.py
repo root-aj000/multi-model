@@ -96,7 +96,7 @@ class VisualModule(nn.Module):
     
     def __init__(
         self, 
-        backbone: str = "resnet50", 
+        backbone: str = "resnet18", 
         pretrained: bool = True,
         out_features: int = 512, 
         freeze: bool = False
