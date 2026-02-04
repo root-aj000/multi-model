@@ -5,50 +5,50 @@ LOG_DIR = os.path.join(PROJECT_ROOT,"logs")
 # SAVED_MODEL_DIR = os.path.join(PROJECT_ROOT,"saved_models")
 
 
-# dataset_generator\gen_script.py
-# RAW_DATA_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen\processed")
-# PROCESSED_DATA_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen\dataset")
-# IMAGE_OUTPUT_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen\dataset\images")
-# LOG_DIR = os.path.join(PROJECT_ROOT,"data\logs\")
+# dataset_generator/gen_script.py
+# RAW_DATA_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen/processed")
+# PROCESSED_DATA_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen/dataset")
+# IMAGE_OUTPUT_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen/dataset/images")
+# LOG_DIR = os.path.join(PROJECT_ROOT,"data/logs/")
 
-# preprocessing\dataset.py
-IMAGE_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen\dataset\images") 
-TRAIN_CSV = os.path.join(PROJECT_ROOT,"_dataset_gen\dataset\Train.csv") 
+# preprocessing/dataset.py
+IMAGE_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen/dataset/images") 
+TRAIN_CSV = os.path.join(PROJECT_ROOT,"_dataset_gen/dataset/Train.csv") 
 
-# models\fg_mfn.py
-MODEL_CONFIG = os.path.join(PROJECT_ROOT,"models\configs\model_config.json") 
+# models/fg_mfn.py
+MODEL_CONFIG = os.path.join(PROJECT_ROOT,"models/configs/model_config.json") 
 
-# preprocessing\dataset_preprocessing.py
-    # TRAIN_CSV = "data\processed\train.csv"
-PROCESSED_IMAGE_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen\dataset\images")
-VAL_CSV = os.path.join(PROJECT_ROOT,"_dataset_gen\dataset\\Val.csv")
-TEST_CSV = os.path.join(PROJECT_ROOT,"_dataset_gen\dataset\Test.csv")
+# preprocessing/dataset_preprocessing.py
+    # TRAIN_CSV = "data/processed/train.csv"
+PROCESSED_IMAGE_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen/dataset/images")
+VAL_CSV = os.path.join(PROJECT_ROOT,"_dataset_gen/dataset//Val.csv")
+TEST_CSV = os.path.join(PROJECT_ROOT,"_dataset_gen/dataset/Test.csv")
 
-# training\train.py
-    # TRAIN_CSV = "data\processed\train.csv"
-    # VAL_CSV = "data\processed\val.csv"
-#    MODEL_CONFIG = "models\configs\model_config.json"
+# training/train.py
+    # TRAIN_CSV = "data/processed/train.csv"
+    # VAL_CSV = "data/processed/val.csv"
+#    MODEL_CONFIG = "models/configs/model_config.json"
 SAVED_MODEL_DIR = os.path.join(PROJECT_ROOT,"saved_models")
 
-# training\logger.py
-    # LOG_DIR = "data\logs\"
+# training/logger.py
+    # LOG_DIR = "data/logs/"
 
-# training\evaluate.py
-    # TEST_CSV = "data\processed\test.csv"
-    # MODEL_CONFIG = "models\configs\model_config.json"
-    # LOG_DIR = "data\logs\"
-SAVED_MODEL_PATH = os.path.join(PROJECT_ROOT,"saved_models\model_best.pt")
+# training/evaluate.py
+    # TEST_CSV = "data/processed/test.csv"
+    # MODEL_CONFIG = "models/configs/model_config.json"
+    # LOG_DIR = "data/logs/"
+SAVED_MODEL_PATH = os.path.join(PROJECT_ROOT,"saved_models/model_best.pt")
 
-# server\predict.py
-    # SAVED_MODEL_PATH = "models\saved_models\model_final.pt"
-    # MODEL_CONFIG = "models\configs\model_config.json"
-IMAGE_UPLOAD_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen\app_temp_images")
+# server/predict.py
+    # SAVED_MODEL_PATH = "models/saved_models/model_final.pt"
+    # MODEL_CONFIG = "models/configs/model_config.json"
+IMAGE_UPLOAD_DIR = os.path.join(PROJECT_ROOT,"_dataset_gen/app_temp_images")
 
 
-# server\app.py
-    # SAVED_MODEL_PATH = "models\saved_models\model_final.pt"
+# server/app.py
+    # SAVED_MODEL_PATH = "models/saved_models/model_final.pt"
     # UPLOAD_FOLDER = IMAGE_UPLOAD_DIR
-    # LOG_DIR = "data\logs\"
+    # LOG_DIR = "data/logs/"
 
 
 print(f"Project Root Directory: {SAVED_MODEL_PATH} ")

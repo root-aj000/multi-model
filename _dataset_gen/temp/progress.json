@@ -1,0 +1,198 @@
+{
+  "last_processed_idx": 5,
+  "metadata": [
+    {
+      "id": 0,
+      "product": "Pizza",
+      "generated_filename": "ad_0001.jpg",
+      "source_image_url": "https://png.pngtree.com/png-clipart/20240310/original/pngtree-slice-of-pepperoni-pizza-isolated-on-transparent-background-png-image_14551875.png",
+      "image_info": {
+        "width": 2500,
+        "height": 2500,
+        "file_size": 608438,
+        "format": null,
+        "mode": "RGB",
+        "source_engine": "duckduckgo"
+      },
+      "background_removal": {
+        "original_pixels": 6250000,
+        "retained_pixels": 1196015,
+        "retention_ratio": 0.1913624,
+        "removal_success": true,
+        "used_original": false,
+        "object_bounds": {
+          "x": 483,
+          "y": 472,
+          "width": 1668,
+          "height": 1401,
+          "area_ratio": 0.37389888
+        }
+      },
+      "image_sequence_num": 1,
+      "original_ad_text": "Fresh pizza arrived steaming hot with melted cheese perfection",
+      "timestamp": "2026-02-03 16:44:09",
+      "success": true
+    },
+    {
+      "id": 1,
+      "product": "Cake",
+      "generated_filename": "ad_0002.jpg",
+      "source_image_url": "https://png.pngtree.com/png-clipart/20231014/original/pngtree-cake-isolated-png-png-image_13300764.png",
+      "image_info": {
+        "width": 1200,
+        "height": 1200,
+        "file_size": 324089,
+        "format": null,
+        "mode": "RGB",
+        "source_engine": "duckduckgo"
+      },
+      "background_removal": {
+        "original_pixels": 1440000,
+        "retained_pixels": 731740,
+        "retention_ratio": 0.5081527777777778,
+        "removal_success": true,
+        "used_original": false,
+        "object_bounds": {
+          "x": 66,
+          "y": 0,
+          "width": 1123,
+          "height": 1015,
+          "area_ratio": 0.7915590277777778
+        }
+      },
+      "image_sequence_num": 1,
+      "original_ad_text": "Chocolate cake slice absolutely divine with rich ganache frosting",
+      "timestamp": "2026-02-03 16:44:41",
+      "success": true
+    },
+    {
+      "id": 2,
+      "product": "Salad",
+      "generated_filename": "ad_0003.jpg",
+      "source_image_url": "https://png.pngtree.com/png-vector/20241012/ourlarge/pngtree-salad-on-transparent-background-png-image_14078680.png",
+      "image_info": {
+        "width": 640,
+        "height": 640,
+        "file_size": 457589,
+        "format": null,
+        "mode": "RGB",
+        "source_engine": "duckduckgo"
+      },
+      "background_removal": {
+        "original_pixels": 409600,
+        "retained_pixels": 263000,
+        "retention_ratio": 0.64208984375,
+        "removal_success": true,
+        "used_original": false,
+        "object_bounds": {
+          "x": 28,
+          "y": 21,
+          "width": 584,
+          "height": 591,
+          "area_ratio": 0.84263671875
+        }
+      },
+      "image_sequence_num": 1,
+      "original_ad_text": "Crisp salad bursting with farm fresh organic vegetables today",
+      "timestamp": "2026-02-03 16:45:04",
+      "success": true
+    },
+    {
+      "id": 3,
+      "product": "Fries",
+      "generated_filename": "ad_0004.jpg",
+      "source_image_url": "https://png.pngtree.com/png-clipart/20230408/original/pngtree-french-fries-with-ketchup-isolated-on-white-background-png-image_9036315.png",
+      "image_info": {
+        "width": 1200,
+        "height": 1200,
+        "file_size": 219584,
+        "format": null,
+        "mode": "RGB",
+        "source_engine": "duckduckgo"
+      },
+      "background_removal": {
+        "original_pixels": 1440000,
+        "retained_pixels": 542948,
+        "retention_ratio": 0.3770472222222222,
+        "removal_success": true,
+        "used_original": false,
+        "object_bounds": {
+          "x": 174,
+          "y": 151,
+          "width": 858,
+          "height": 835,
+          "area_ratio": 0.49752083333333336
+        }
+      },
+      "image_sequence_num": 1,
+      "original_ad_text": "Golden fries seasoned perfectly crunchy outside fluffy inside",
+      "timestamp": "2026-02-03 16:45:26",
+      "success": true
+    },
+    {
+      "id": 4,
+      "product": "Coffee",
+      "generated_filename": "ad_0005.jpg",
+      "source_image_url": "https://png.pngtree.com/png-vector/20230831/ourlarge/pngtree-coffee-bean-isolated-png-image_9195013.png",
+      "image_info": {
+        "width": 640,
+        "height": 640,
+        "file_size": 380512,
+        "format": "PNG",
+        "mode": "RGBA",
+        "source_engine": "duckduckgo"
+      },
+      "background_removal": {
+        "original_pixels": 409600,
+        "retained_pixels": 197268,
+        "retention_ratio": 0.481611328125,
+        "removal_success": true,
+        "used_original": false,
+        "object_bounds": {
+          "x": 18,
+          "y": 70,
+          "width": 598,
+          "height": 503,
+          "area_ratio": 0.7343603515625
+        }
+      },
+      "image_sequence_num": 1,
+      "original_ad_text": "Smooth coffee blend delivers consistent morning energy boost",
+      "timestamp": "2026-02-03 16:45:46",
+      "success": true
+    },
+    {
+      "id": 5,
+      "product": "Burger",
+      "generated_filename": "ad_0006.jpg",
+      "source_image_url": "https://png.pngtree.com/png-clipart/20230414/original/pngtree-isolated-burger-on-transparent-background-png-image_9055072.png",
+      "image_info": {
+        "width": 1200,
+        "height": 1200,
+        "file_size": 256236,
+        "format": null,
+        "mode": "RGB",
+        "source_engine": "duckduckgo"
+      },
+      "background_removal": {
+        "original_pixels": 1440000,
+        "retained_pixels": 710518,
+        "retention_ratio": 0.49341527777777777,
+        "removal_success": true,
+        "used_original": false,
+        "object_bounds": {
+          "x": 12,
+          "y": 71,
+          "width": 1177,
+          "height": 1118,
+          "area_ratio": 0.9138097222222222
+        }
+      },
+      "image_sequence_num": 1,
+      "original_ad_text": "Juicy burger stacked high with fresh toppings and sauce",
+      "timestamp": "2026-02-03 16:46:04",
+      "success": true
+    }
+  ],
+  "timestamp": "2026-02-03 16:46:18"
+}

@@ -1,11 +1,201 @@
 image_path,text,theme,theme_num,sentiment,sentiment_num,emotion,emotion_num,dominant_colour,dominant_colour_num,attention_score,attention_score_num,trust_safety,trust_safety_num,target_audience,target_audience_num,predicted_ctr,predicted_ctr_num,likelihood_shares,likelihood_shares_num,keywords,monetary_mention,call_to_action,object_detected
-U:\project\_dataset_gen\dataset\images\ad_0001.jpg,Fresh hot pizza delivered to your door! 50% OFF today only. Order Now!,Food,0,Positive,0,Excitement,0,Red,0,High,0,Safe,0,Food Lovers,1,High,0,Medium,1,Pizza Offer Delivery,50% OFF,Order Now,Pizza
-U:\project\_dataset_gen\dataset\images\ad_0002.jpg,New iPhone 15 Pro Max - Revolutionary camera system. Pre-order now.,Tech,2,Positive,0,Anticipation,7,Black,6,High,0,Safe,0,Tech Enthusiasts,2,High,0,High,0,iPhone Camera Pro,,Pre-order now,Phone
-U:\project\_dataset_gen\dataset\images\ad_0003.jpg,Summer fashion collection - Up to 70% discount on all items!,Fashion,1,Positive,0,Joy,2,Yellow,3,Medium,1,Safe,0,Fashionistas,3,Medium,1,Medium,1,Fashion Summer Collection,70% discount,Shop Now,Clothing
-U:\project\_dataset_gen\dataset\images\ad_0004.jpg,Warning: This product contains chemicals known to cause harm.,Health,3,Negative,1,Fear,3,White,7,High,0,Unsafe,1,General,0,Low,2,Low,2,Warning Chemicals Harm,,,Label
-U:\project\_dataset_gen\dataset\images\ad_0005.jpg,Join our gym today! First month FREE. Transform your body.,Health,3,Positive,0,Excitement,0,Blue,1,High,0,Safe,0,Fitness Enthusiasts,6,Medium,1,Low,2,Gym Fitness Body,FREE,Join today,Equipment
-U:\project\_dataset_gen\dataset\images\ad_0006.jpg,Breaking news: Stock market crashes amid global uncertainty.,Finance,5,Negative,1,Fear,3,Red,0,High,0,Questionable,2,Professionals,5,Low,2,High,0,Stock Market Crash,,Read More,Chart
-U:\project\_dataset_gen\dataset\images\ad_0007.jpg,Family vacation packages starting at $499. Book your adventure!,Travel,4,Positive,0,Anticipation,7,Blue,1,Medium,1,Safe,0,Parents,4,Medium,1,Medium,1,Vacation Family Adventure,$499,Book Now,Beach
-U:\project\_dataset_gen\dataset\images\ad_0008.jpg,Online courses 50% off. Learn coding from experts!,Education,8,Positive,0,Trust,1,Green,2,Medium,1,Safe,0,Students,7,Medium,1,High,0,Coding Courses Online,50% off,Enroll Now,Computer
-U:\project\_dataset_gen\dataset\images\ad_0009.jpg,Concert tickets available now! Limited seats remaining.,Entertainment,6,Positive,0,Excitement,0,Purple,5,High,0,Safe,0,General,0,High,0,High,0,Concert Tickets Music,,Buy Now,Stage
-U:\project\_dataset_gen\dataset\images\ad_0010.jpg,Sports gear clearance sale - Everything must go!,Sports,7,Neutral,2,Anticipation,7,Orange,4,Medium,1,Safe,0,Fitness Enthusiasts,6,Low,2,Low,2,Sports Gear Sale,,Shop Now,Equipment
+dataset/images/ad_0001.jpg,Fresh pizza arrived steaming hot with melted cheese perfection,Food,0,Positive,0,Joy,0,Red,0,High,0,Safe,0,Food Lovers,0,High,0,High,0,Pizza Cheese Fresh,,,Pizza
+dataset/images/ad_0002.jpg,Chocolate cake slice absolutely divine with rich ganache frosting,Food,0,Positive,0,Joy,0,Brown,7,High,0,Safe,0,Food Lovers,0,High,0,High,0,Chocolate Cake Ganache,,,Cake
+dataset/images/ad_0003.jpg,Crisp salad bursting with farm fresh organic vegetables today,Food,0,Positive,0,Joy,0,Green,3,Medium,1,Safe,0,Food Lovers,0,Medium,1,Medium,1,Fresh Salad Organic,,,Salad
+dataset/images/ad_0004.jpg,Golden fries seasoned perfectly crunchy outside fluffy inside,Food,0,Positive,0,Joy,0,Yellow,6,High,0,Safe,0,General,6,High,0,High,0,Crispy Fries Golden,,,Fries
+dataset/images/ad_0005.jpg,Smooth coffee blend delivers consistent morning energy boost,Food,0,Positive,0,Trust,2,Black,1,Medium,1,Safe,0,Professionals,9,Medium,1,Low,2,Coffee Energy Morning,,,Coffee
+dataset/images/ad_0006.jpg,Juicy burger stacked high with fresh toppings and sauce,Food,0,Positive,0,Excitement,3,Red,0,High,0,Safe,0,Food Lovers,0,High,0,High,0,Burger Juicy Fresh,,,Burger
+sample_007.jpg,Homemade pasta tossed in aromatic herbs tastes incredible,Food,0,Positive,0,Joy,0,White,4,Medium,1,Safe,0,Families,8,Medium,1,Medium,1,Pasta Homemade Herbs,,,Pasta
+sample_008.jpg,Fruit smoothie packed with vitamins refreshing and delicious,Food,0,Positive,0,Excitement,3,Green,3,High,0,Safe,0,Young Adults,7,High,0,High,0,Smoothie Fresh Vitamins,,,Smoothie
+sample_009.jpg,Artisan bread crusty exterior soft warm center amazing,Food,0,Positive,0,Joy,0,Brown,7,Medium,1,Safe,0,General,6,Medium,1,Medium,1,Artisan Bread Fresh,,,Bread
+sample_010.jpg,Spicy tacos loaded with flavorful meat and salsa verde,Food,0,Positive,0,Excitement,3,Red,0,High,0,Safe,0,Food Lovers,0,High,0,High,0,Tacos Spicy Flavorful,,,Tacos
+sample_011.jpg,Creamy ice cream scoop melts perfectly on the tongue,Food,0,Positive,0,Joy,0,White,4,High,0,Safe,0,Families,8,High,0,High,0,Ice Cream Creamy,,,IceCream
+sample_012.jpg,Grilled vegetables charred just right smoky sweet flavor,Food,0,Positive,0,Trust,2,Green,3,Medium,1,Safe,0,Food Lovers,0,Medium,1,Low,2,Grilled Vegetables Smoky,,,Vegetables
+sample_013.jpg,Raw chicken served pink inside completely unacceptable dinner,Food,0,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,General,6,Low,2,Medium,1,Raw Chicken Dangerous,,,Chicken
+sample_014.jpg,Fish smelled rotten and made stomach churn immediately,Food,0,Negative,1,Anger,1,Grey,5,High,0,Unsafe,1,General,6,Low,2,High,0,Rotten Fish Smell,,,Fish
+sample_015.jpg,Server dropped hot soup on my lap burning my skin badly,Food,0,Negative,1,Anger,1,White,4,High,0,Unsafe,1,General,6,Low,2,High,0,Hot Soup Burn,,,Soup
+sample_016.jpg,Pizza arrived two hours late ice cold and disgusting,Food,0,Negative,1,Anger,1,Red,0,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Late Pizza Cold,,,Pizza
+sample_017.jpg,Found metal shard in sandwich could have killed someone,Food,0,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Metal Shard Sandwich,,,Sandwich
+sample_018.jpg,Expiration date on milk was six months past due today,Food,0,Negative,1,Anger,1,White,4,Medium,1,Unsafe,1,Families,8,Low,2,High,0,Expired Milk Dangerous,,,Milk
+sample_019.jpg,Burger bun was moldy green completely inedible meal,Food,0,Negative,1,Anger,1,Green,3,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Moldy Burger Gross,,,Burger
+sample_020.jpg,Drink tasted like chemicals and burned my throat severely,Food,0,Negative,1,Fear,4,Yellow,6,High,0,Unsafe,1,General,6,Low,2,High,0,Chemical Drink Burn,,,Drink
+sample_021.jpg,Order completely wrong and staff refused to fix anything,Food,0,Negative,1,Anger,1,Red,0,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Wrong Order Rude,,,Order
+sample_022.jpg,Salad had live insects crawling inside the lettuce leaves,Food,0,Negative,1,Fear,4,Green,3,High,0,Unsafe,1,General,6,Low,2,High,0,Insects Salad Gross,,,Salad
+sample_023.jpg,Food poisoning started thirty minutes after eating here,Food,0,Negative,1,Fear,4,White,4,High,0,Unsafe,1,General,6,Low,2,High,0,Food Poisoning Sick,,,Food
+sample_024.jpg,The coffee here tastes consistent every single morning,Food,2,Neutral,2,Trust,2,Black,1,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Consistent Coffee Morning,,,Coffee
+sample_025.jpg,Menu offers standard options without any surprises really,Food,2,Neutral,2,Trust,2,Brown,7,Low,2,Questionable,2,General,6,Low,2,Low,2,Standard Menu Options,,,Menu
+sample_026.jpg,Portion size matches description exactly as advertised online,Food,2,Neutral,2,Trust,2,White,4,Medium,1,Questionable,2,General,6,Medium,1,Medium,1,Portion Size Accurate,,,Food
+sample_027.jpg,Restaurant lighting is bright and tables are clean today,Food,2,Neutral,2,Trust,2,Grey,5,Low,2,Questionable,2,General,6,Low,2,Low,2,Clean Restaurant Bright,,,Restaurant
+sample_028.jpg,Prices seem average compared to similar establishments nearby,Food,2,Neutral,2,Trust,2,Black,1,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Average Prices Fair,,,Prices
+sample_029.jpg,Wait time was approximately twenty minutes during lunch rush,Food,2,Neutral,2,Trust,2,White,4,Low,2,Questionable,2,General,6,Low,2,Low,2,Wait Time Minutes,,,Wait
+sample_030.jpg,Soft drink dispenser provides consistent carbonation levels,Food,2,Neutral,2,Trust,2,Red,0,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Consistent Soda Dispenser,,,Soda
+sample_031.jpg,Packaging appears functional and keeps food warm adequately,Food,2,Neutral,2,Trust,2,Blue,2,Low,2,Questionable,2,General,6,Low,2,Low,2,Functional Packaging Warm,,,Packaging
+sample_032.jpg,Ingredients list matches what is typically expected here,Food,2,Neutral,2,Trust,2,Green,3,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Ingredients List Typical,,,Ingredients
+sample_033.jpg,Delivery driver arrived within estimated timeframe provided,Food,2,Neutral,2,Trust,2,Yellow,6,Low,2,Questionable,2,General,6,Low,2,Low,2,Delivery On Time,,,Delivery
+sample_034.jpg,Store layout follows standard fast casual design patterns,Food,2,Neutral,2,Trust,2,Grey,5,Low,2,Questionable,2,General,6,Low,2,Low,2,Standard Store Layout,,,Store
+sample_035.jpg,Designer handbag stitching flawless feels incredibly luxurious,Fashion,1,Positive,0,Joy,0,Black,1,High,0,Safe,0,Fashionistas,1,High,0,High,0,Designer Handbag Luxurious,,,Handbag
+sample_036.jpg,New jeans fit perfectly flattering every curve beautifully,Fashion,1,Positive,0,Joy,0,Blue,2,High,0,Safe,0,Fashionistas,1,High,0,High,0,Jeans Flattering Perfect,,,Jeans
+sample_037.jpg,Leather boots mold to feet after one day of comfortable wear,Fashion,1,Positive,0,Trust,2,Brown,7,Medium,1,Safe,0,Fashionistas,1,Medium,1,Medium,1,Leather Boots Comfortable,,,Boots
+sample_038.jpg,Silk scarf adds elegant touch to any outfit instantly,Fashion,1,Positive,0,Excitement,3,Red,0,High,0,Safe,0,Fashionistas,1,High,0,High,0,Silk Scarf Elegant,,,Scarf
+sample_039.jpg,Watch face gleams under light catching everyones attention,Fashion,1,Positive,0,Excitement,3,White,4,High,0,Safe,0,Professionals,9,High,0,High,0,Watch Gleams Attention,,,Watch
+sample_040.jpg,Sunglasses block glare while looking incredibly stylish,Fashion,1,Positive,0,Joy,0,Black,1,Medium,1,Safe,0,Fashionistas,1,Medium,1,Medium,1,Sunglasses Stylish Glare,,,Sunglasses
+sample_041.jpg,Perfume scent lingers delicately throughout entire evening,Fashion,1,Positive,0,Joy,0,White,4,Medium,1,Safe,0,Fashionistas,1,Medium,1,Medium,1,Perfume Scent Lingers,,,Perfume
+sample_042.pdf,Necklace pendant shines brilliantly under chandelier lights,Fashion,1,Positive,0,Excitement,3,Yellow,6,High,0,Safe,0,Fashionistas,1,High,0,High,0,Necklace Shines Brilliant,,,Necklace
+sample_043.jpg,Wool coat keeps warmth without sacrificing sleek appearance,Fashion,1,Positive,0,Trust,2,Grey,5,Medium,1,Safe,0,Fashionistas,1,Medium,1,Low,2,Wool Coat Warm,,,Coat
+sample_044.jpg,High heels surprisingly comfortable for all day wear today,Fashion,1,Positive,0,Joy,0,Red,0,Medium,1,Safe,0,Fashionistas,1,Medium,1,Medium,1,Heels Comfortable Surprising,,,Heels
+sample_045.jpg,Canvas sneakers look fresh with every casual outfit combo,Fashion,1,Positive,0,Excitement,3,White,4,High,0,Safe,0,Young Adults,7,High,0,High,0,Sneakers Fresh Casual,,,Sneakers
+sample_046.jpg,Gold bracelet catches light perfectly on my wrist,Fashion,1,Positive,0,Joy,0,Yellow,6,High,0,Safe,0,Fashionistas,1,High,0,High,0,Gold Bracelet Light,,,Bracelet
+sample_047.jpg,Cheap shirt ripped at seams after just one wash only,Fashion,1,Negative,1,Anger,1,Grey,5,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Cheap Shirt Ripped,,,Shirt
+sample_048.jpg,Zipper broke immediately and fabric feels like plastic,Fashion,1,Negative,1,Anger,1,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Zipper Broke Plastic,,,Jacket
+sample_049.jpg,Color faded dramatically after first wash completely ruined,Fashion,1,Negative,1,Anger,1,Red,0,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Color Faded Ruined,,,Shirt
+sample_050.jpg,Seams unraveled exposing poor craftsmanship everywhere,Fashion,1,Negative,1,Anger,1,Blue,2,High,0,Unsafe,1,General,6,Low,2,High,0,Seams Unraveled Craftsmanship,,,Clothing
+sample_051.jpg,Material caused allergic rash after wearing for ten minutes,Fashion,1,Negative,1,Fear,4,White,4,High,0,Unsafe,1,General,6,Low,2,High,0,Allergic Rash Material,,,Material
+sample_052.jpg,Advertised as leather but clearly plastic imitation material,Fashion,1,Negative,1,Anger,1,Brown,7,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Fake Leather Plastic,,,Bag
+sample_053.jpg,Heel snapped off while walking on flat ground suddenly,Fashion,1,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Heel Snapped Walking,,,Heels
+sample_054.jpg,Size chart completely inaccurate ordered medium fits like small,Fashion,1,Negative,1,Anger,1,Grey,5,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Size Chart Wrong,,,Clothing
+sample_055.jpg,Metal hardware tarnished immediately upon contact with water,Fashion,1,Negative,1,Anger,1,Yellow,6,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Metal Tarnished Water,,,Jewelry
+sample_056.jpg,Strap broke loose causing bag to fall and break phone,Fashion,1,Negative,1,Anger,1,Brown,7,High,0,Unsafe,1,General,6,Low,2,High,0,Strap Broke Bag,,,Strap
+sample_057.jpg,Product never arrived and customer service completely unhelpful,Fashion,1,Negative,1,Anger,1,Red,0,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,No Delivery Service,,,Order
+sample_058.jpg,These trendy sunglasses look okay but feel flimsy overall,Fashion,2,Neutral,2,Excitement,3,Black,1,Medium,1,Questionable,2,Young Adults,7,Medium,1,Medium,1,Trendy Sunglasses Flimsy,,,Sunglasses
+sample_059.jpg,Wallet material seems decent for the listed price online,Fashion,2,Neutral,2,Trust,2,Brown,7,Low,2,Questionable,2,General,6,Low,2,Low,2,Wallet Material Decent,,,Wallet
+sample_060.jpg,Scarf length works for most standard styling methods,Fashion,2,Neutral,2,Trust,2,Red,0,Low,2,Questionable,2,General,6,Low,2,Low,2,Scarf Length Standard,,,Scarf
+sample_061.jpg,Watch battery lasted expected eighteen months before dying,Fashion,2,Neutral,2,Trust,2,White,4,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Watch Battery Lasted,,,Watch
+sample_062.pdf,Ring design appears similar to photos on website currently,Fashion,2,Neutral,2,Trust,2,Yellow,6,Low,2,Questionable,2,General,6,Low,2,Low,2,Ring Design Similar,,,Ring
+sample_063.jpg,Heels height matches description but comfort varies,Fashion,2,Neutral,2,Trust,2,Black,1,Medium,1,Questionable,2,Fashionistas,1,Medium,1,Low,2,Heels Height Comfort,,,Heels
+sample_064.jpg,Belt buckle functions properly after three months of use,Fashion,2,Neutral,2,Trust,2,Brown,7,Low,2,Questionable,2,General,6,Low,2,Low,2,Belt Buckle Functions,,,Belt
+sample_065.jpg,Perfume scent fades after four hours which seems typical,Fashion,2,Neutral,2,Trust,2,White,4,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Perfume Fades Typical,,,Perfume
+sample_066.jpg,Button fell off after second wear poor quality confirmed,Fashion,2,Neutral,2,Fear,4,Blue,2,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Button Fell Poor,,,Shirt
+sample_067.jpg,Color runs in wash despite following all care instructions,Fashion,2,Neutral,2,Anger,1,Red,0,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Color Runs Wash,,,Clothing
+sample_068.jpg,Smartphone boots instantly and runs apps flawlessly all day,Tech,2,Positive,0,Joy,0,Black,1,High,0,Safe,0,Tech Enthusiasts,2,High,0,High,0,Smartphone Boots Flawlessly,,,Phone
+sample_069.jpg,Laptop screen resolution stunning for photo editing tasks,Tech,2,Positive,0,Excitement,3,Grey,5,High,0,Safe,0,Professionals,9,High,0,High,0,Laptop Screen Stunning,,,Laptop
+sample_070.jpg,Headphones noise cancellation works perfectly on subway commute,Tech,2,Positive,0,Joy,0,White,4,High,0,Safe,0,Young Adults,7,High,0,High,0,Headphones Noise Cancel,,,Headphones
+sample_071.jpg,Tablet battery lasts full twelve hours of continuous video streaming,Tech,2,Positive,0,Trust,2,Black,1,Medium,1,Safe,0,Tech Enthusiasts,2,Medium,1,Medium,1,Tablet Battery Lasts,,,Tablet
+sample_072.jpg,Smartwatch tracks heart rate accurately during intense workouts,Tech,2,Positive,0,Excitement,3,Blue,2,High,0,Safe,0,Tech Enthusiasts,2,High,0,High,0,Smartwatch Tracks Heart,,,Watch
+sample_073.jpg,Camera captures sharp images even in low light conditions,Tech,2,Positive,0,Joy,0,Black,1,High,0,Safe,0,Photographers,9,High,0,High,0,Camera Sharp Lowlight,,,Camera
+sample_074.jpg,Gaming keyboard RGB lighting enhances entire setup beautifully,Tech,2,Positive,0,Excitement,3,Red,0,High,0,Safe,0,Gamers,7,High,0,High,0,Gaming Keyboard RGB,,,Keyboard
+sample_075.jpg,Wireless mouse responds instantly without any lag issues,Tech,2,Positive,0,Trust,2,White,4,Medium,1,Safe,0,Professionals,9,Medium,1,Medium,1,Wireless Mouse Responsive,,,Mouse
+sample_076.jpg,Monitor colors calibrated perfectly for design work accuracy,Tech,2,Positive,0,Joy,0,Grey,5,High,0,Safe,0,Designers,9,High,0,High,0,Monitor Colors Accurate,,,Monitor
+sample_077.jpg,Portable charger powers devices quickly with USB C fast charging,Tech,2,Positive,0,Excitement,3,Blue,2,High,0,Safe,0,Tech Enthusiasts,2,High,0,High,0,Portable Charger Fast,,,Charger
+sample_078.jpg,VR headset immersion feels like stepping into another reality,Tech,2,Positive,0,Excitement,3,Black,1,High,0,Safe,0,Gamers,7,High,0,High,0,VR Headset Immersion,,,Headset
+sample_079.jpg,Smart speaker understands voice commands even from across room,Tech,2,Positive,0,Joy,0,White,4,Medium,1,Safe,0,Families,8,Medium,1,Medium,1,Smart Speaker Voice,,,Speaker
+sample_080.jpg,Phone overheated and shutdown during important business call,Tech,2,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,Professionals,9,Low,2,High,0,Phone Overheated Shutdown,,,Phone
+sample_081.jpg,Laptop screen cracked without any impact or dropping incident,Tech,2,Negative,1,Anger,1,Grey,5,High,0,Unsafe,1,General,6,Low,2,High,0,Screen Cracked Mystery,,,Laptop
+sample_082.jpg,Keyboard keys stick constantly making typing impossible now,Tech,2,Negative,1,Anger,1,Black,1,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Keyboard Keys Stick,,,Keyboard
+sample_083.jpg,Battery expanded inside tablet causing back panel to separate,Tech,2,Negative,1,Fear,4,White,4,High,0,Unsafe,1,General,6,Low,2,High,0,Battery Expanded Danger,,,Tablet
+sample_084.jpg,Hard drive failed losing three years of important client data,Tech,2,Negative,1,Anger,1,Blue,2,High,0,Unsafe,1,Professionals,9,Low,2,High,0,Hard Drive Failed Data,,,HardDrive
+sample_085.jpg,Monitor flickers constantly giving me severe headaches daily,Tech,2,Negative,1,Anger,1,Grey,5,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Monitor Flickers Headaches,,,Monitor
+sample_086.jpg,Smartwatch band caused skin irritation and allergic reaction,Tech,2,Negative,1,Fear,4,Brown,7,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Watch Band Allergy,,,Watch
+sample_087.jpg,WiFi card drops connection every five minutes without fail,Tech,2,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,WiFi Drops Constantly,,,WiFi
+sample_088.jpg,Graphics card artifacting makes games completely unplayable now,Tech,2,Negative,1,Anger,1,Green,3,High,0,Unsafe,1,Gamers,7,Low,2,High,0,Graphics Card Broken,,,GraphicsCard
+sample_089.jpg,USB ports stopped working after just two months of light use,Tech,2,Negative,1,Anger,1,Black,1,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,USB Ports Failed,,,USB
+sample_090.jpg,Camera lens scratched in bag despite protective cap being on,Tech,2,Negative,1,Fear,4,Blue,2,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Camera Lens Scratched,,,Camera
+sample_091.jpg,Software update process takes fifteen minutes typically,Tech,2,Neutral,2,Trust,2,Grey,5,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Software Update Minutes,,,Software
+sample_092.jpg,Device weight feels standard for this category of products,Tech,2,Neutral,2,Trust,2,White,4,Low,2,Questionable,2,General,6,Low,2,Low,2,Device Weight Standard,,,Device
+sample_093.jpg,Screen brightness adequate for indoor office environments,Tech,2,Neutral,2,Trust,2,Blue,2,Medium,1,Questionable,2,Professionals,9,Medium,1,Low,2,Screen Brightness Adequate,,,Screen
+sample_094.jpg,Fan noise noticeable but within expected parameters during load,Tech,2,Neutral,2,Trust,2,Black,1,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Fan Noise Expected,,,Fan
+sample_095.jpg,Build material matches specification sheet exactly per manual,Tech,2,Neutral,2,Trust,2,Grey,5,Low,2,Questionable,2,General,6,Low,2,Low,2,Build Material Matches,,,Material
+sample_096.jpg,Keyboard layout follows industry standard QWERTY design,Tech,2,Neutral,2,Trust,2,Black,1,Low,2,Questionable,2,General,6,Low,2,Low,2,Keyboard Layout Standard,,,Keyboard
+sample_097.jpg,Charging cable length reaches from outlet to desk comfortably,Tech,2,Neutral,2,Trust,2,White,4,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Charging Cable Length,,,Cable
+sample_098.jpg,Speaker volume reaches maximum without distortion at eighty percent,Tech,2,Neutral,2,Trust,2,Red,0,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Speaker Volume Maximum,,,Speaker
+sample_099.jpg,Processor speed benchmarks match advertised specifications closely,Tech,2,Neutral,2,Trust,2,Blue,2,Low,2,Questionable,2,Tech Enthusiasts,2,Medium,1,Low,2,Processor Speed Benchmarks,,,Processor
+sample_100.jpg,Touchscreen responds consistently to taps and swipes accurately,Tech,2,Neutral,2,Trust,2,Black,1,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Touchscreen Responds Consistently,,,Screen
+sample_101.jpg,Memory capacity sufficient for average daily multitasking needs,Tech,2,Neutral,2,Trust,2,Grey,5,Low,2,Questionable,2,General,6,Low,2,Low,2,Memory Capacity Sufficient,,,Memory
+sample_102.jpg,Electric sedan accelerates silently and incredibly fast,Automotive,3,Positive,0,Excitement,3,White,4,High,0,Safe,0,Car Enthusiasts,3,High,0,High,0,Electric Sedan Fast,,,Car
+sample_103.jpg,Luxury SUV interior materials feel premium throughout cabin,Automotive,3,Positive,0,Joy,0,Black,1,High,0,Safe,0,Car Enthusiasts,3,High,0,High,0,Luxury SUV Premium,,,SUV
+sample_104.jpg,Convertible top operates smoothly without any mechanical noise,Automotive,3,Positive,0,Trust,2,Blue,2,Medium,1,Safe,0,Car Enthusiasts,3,Medium,1,Medium,1,Convertible Top Smooth,,,Convertible
+sample_105.jpg,Sports car handling precise around every tight corner curve,Automotive,3,Positive,0,Excitement,3,Red,0,High,0,Safe,0,Car Enthusiasts,3,High,0,High,0,Sports Car Handling,,,Car
+sample_106.jpg,Truck bed capacity holds exactly one ton payload easily,Automotive,3,Positive,0,Joy,0,Grey,5,Medium,1,Safe,0,Professionals,9,Medium,1,Medium,1,Truck Bed Capacity,,,Truck
+sample_107.jpg,Electric bike battery charges fully in just three hours now,Automotive,3,Positive,0,Excitement,3,Green,3,High,0,Safe,0,Young Adults,7,High,0,High,0,Electric Bike Charges,,,Bike
+sample_108.jpg,Scooter folds compactly fitting into car trunk with room,Automotive,3,Positive,0,Joy,0,Black,1,Medium,1,Safe,0,General,6,Medium,1,Medium,1,Scooter Folds Compact,,,Scooter
+sample_109.jpg,Car audio system delivers crystal clear sound at max volume,Automotive,3,Positive,0,Joy,0,Blue,2,High,0,Safe,0,Car Enthusiasts,3,High,0,High,0,Car Audio Crystal,,,Audio
+sample_110.jpg,Motorcycle engine purrs smoothly at highway speeds consistently,Automotive,3,Positive,0,Trust,2,Red,0,Medium,1,Safe,0,Car Enthusiasts,3,Medium,1,Medium,1,Motorcycle Engine Purrs,,,Motorcycle
+sample_111.jpg,SUV panoramic sunroof opens wide for stargazing nights,Automotive,3,Positive,0,Excitement,3,Black,1,High,0,Safe,0,Families,8,High,0,High,0,SUV Sunroof Stargazing,,,Sunroof
+sample_112.jpg,Truck towing capacity exceeds expectations on steep mountain roads,Automotive,3,Positive,0,Joy,0,Grey,5,High,0,Safe,0,Professionals,9,High,0,High,0,Truck Towing Exceeds,,,Truck
+sample_113.jpg,Hybrid system switches seamlessly between gas and electric power,Automotive,3,Positive,0,Trust,2,Blue,2,Medium,1,Safe,0,Car Enthusiasts,3,Medium,1,Medium,1,Hybrid System Seamless,,,Hybrid
+sample_114.jpg,Car broke down completely on the empty highway,Automotive,3,Negative,1,Fear,4,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,Car Breakdown Highway,,,Car
+sample_115.jpg,Brakes failed approaching stop sign nearly causing collision,Automotive,3,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Brakes Failed Collision,,,Brakes
+sample_116.jpg,Tire blew out at high speed shredding rubber everywhere,Automotive,3,Negative,1,Anger,1,Grey,5,High,0,Unsafe,1,General,6,Low,2,High,0,Tire Blew Shredded,,,Tire
+sample_117.jpg,Engine smoke poured from hood indicating serious internal damage,Automotive,3,Negative,1,Fear,4,White,4,High,0,Unsafe,1,General,6,Low,2,High,0,Engine Smoke Damage,,,Engine
+sample_118.jpg,Transmission slipped repeatedly leaving me stranded downtown,Automotive,3,Negative,1,Anger,1,Blue,2,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Transmission Slipped Stranded,,,Transmission
+sample_119.jpg,Airbags deployed randomly while driving on smooth pavement,Automotive,3,Negative,1,Fear,4,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,Airbags Deployed Random,,,Airbags
+sample_120.jpg,Steering wheel locked up making vehicle impossible to control,Automotive,3,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Steering Locked Control,,,Steering
+sample_121.jpg,Rust discovered underneath frame compromising structural integrity,Automotive,3,Negative,1,Anger,1,Grey,5,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Rust Underneath Frame,,,Rust
+sample_122.jpg,Fuel leak detected strong gasoline smell inside cabin area,Automotive,3,Negative,1,Fear,4,Yellow,6,High,0,Unsafe,1,General,6,Low,2,High,0,Fuel Leak Gasoline,,,Fuel
+sample_123.pdf,Check engine light flashing repeatedly without clear cause,Automotive,3,Negative,1,Anger,1,Blue,2,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Engine Light Flashing,,,Engine
+sample_124.jpg,Vehicle recalls seem common for this particular manufacturer,Automotive,2,Neutral,2,Fear,4,Grey,5,Medium,1,Questionable,2,General,6,Low,2,Medium,1,Vehicle Recalls Common,,,Vehicle
+sample_125.jpg,Dealer service appointment availability typically three weeks out,Automotive,2,Neutral,2,Trust,2,White,4,Low,2,Questionable,2,General,6,Low,2,Low,2,Dealer Service Weeks,,,Service
+sample_126.jpg,Insurance rates fluctuate based on driver history and location,Automotive,2,Neutral,2,Trust,2,Blue,2,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Insurance Rates Fluctuate,,,Insurance
+sample_127.jpg,Gas mileage varies depending on driving style and conditions,Automotive,2,Neutral,2,Trust,2,Green,3,Low,2,Questionable,2,General,6,Low,2,Low,2,Gas Mileage Varies,,,Gas
+sample_128.jpg,Resale value drops approximately fifteen percent annually standard,Automotive,2,Neutral,2,Trust,2,Red,0,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Resale Value Drops,,,Value
+sample_129.jpg,Paint quality appears adequate for daily commuter vehicle use,Automotive,2,Neutral,2,Trust,2,Black,1,Low,2,Questionable,2,General,6,Low,2,Low,2,Paint Quality Adequate,,,Paint
+sample_130.jpg,Tire pressure monitoring system alerts occasionally without reason,Automotive,2,Neutral,2,Fear,4,Yellow,6,Medium,1,Questionable,2,General,6,Low,2,Medium,1,Tire Pressure Alerts,,,Tire
+sample_131.jpg,Interior cabin noise level acceptable for highway driving speeds,Automotive,2,Neutral,2,Trust,2,Grey,5,Low,2,Questionable,2,General,6,Low,2,Low,2,Cabin Noise Acceptable,,,Noise
+sample_132.jpg,Trunk space dimensions match manufacturer specification sheet,Automotive,2,Neutral,2,Trust,2,Blue,2,Low,2,Questionable,2,General,6,Low,2,Low,2,Trunk Space Dimensions,,,Trunk
+sample_133.jpg,Headlight brightness adequate for rural road conditions night,Automotive,2,Neutral,2,Trust,2,White,4,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Headlight Brightness Adequate,,,Headlight
+sample_134.jpg,Warranty coverage seems standard for industry competitors,Automotive,2,Neutral,2,Trust,2,Black,1,Low,2,Questionable,2,General,6,Low,2,Low,2,Warranty Standard Industry,,,Warranty
+sample_135.jpg,Beach resort ocean view breathtaking from private balcony suite,Travel,4,Positive,0,Joy,0,Blue,2,High,0,Safe,0,Travelers,4,High,0,High,0,Beach Resort Ocean,,,Resort
+sample_136.jpg,Flight landed thirty minutes early smooth touchdown experience,Travel,4,Positive,0,Excitement,3,White,4,High,0,Safe,0,Travelers,4,High,0,High,0,Flight Landed Early,,,Flight
+sample_137.jpg,Hotel bed luxuriously comfortable with premium pillow selection,Travel,4,Positive,0,Joy,0,Grey,5,High,0,Safe,0,Travelers,4,High,0,High,0,Hotel Bed Luxurious,,,Hotel
+sample_138.jpg,Mountain hiking trail offers spectacular panoramic valley views,Travel,4,Positive,0,Excitement,3,Green,3,High,0,Safe,0,Travelers,4,High,0,High,0,Mountain Trail Views,,,Trail
+sample_139.jpg,Cruise ship dining room serves five star gourmet meals nightly,Travel,4,Positive,0,Joy,0,Red,0,High,0,Safe,0,Travelers,4,High,0,High,0,Cruise Dining Gourmet,,,Cruise
+sample_140.jpg,Passport control line moved efficiently through customs today,Travel,4,Positive,0,Trust,2,Blue,2,Medium,1,Safe,0,Travelers,4,Medium,1,Medium,1,Passport Control Efficient,,,Passport
+sample_141.jpg,Tropical island paradise crystal clear water surrounds entire area,Travel,4,Positive,0,Joy,0,Blue,2,High,0,Safe,0,Travelers,4,High,0,High,0,Tropical Island Paradise,,,Island
+sample_142.jpg,Train departed exactly on schedule and arrived promptly,Travel,4,Positive,0,Excitement,3,Grey,5,Medium,1,Safe,0,Travelers,4,Medium,1,Medium,1,Train On Schedule,,,Train
+sample_143.jpg,City tour guide shared fascinating historical stories throughout,Travel,4,Positive,0,Trust,2,Yellow,6,Medium,1,Safe,0,Travelers,4,Medium,1,Medium,1,City Tour Guide,,,Tour
+sample_144.jpg,Airport lounge access provides quiet space to relax comfortably,Travel,4,Positive,0,Joy,0,White,4,High,0,Safe,0,Professionals,9,High,0,High,0,Airport Lounge Quiet,,,Lounge
+sample_145.jpg,Sunset from mountain peak painted sky orange and purple,Travel,4,Positive,0,Excitement,3,Orange,6,High,0,Safe,0,Travelers,4,High,0,High,0,Sunset Mountain Sky,,,Sunset
+sample_146.jpg,Flight cancelled last minute leaving passengers stranded overnight,Travel,4,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,Flight Cancelled Stranded,,,Flight
+sample_147.jpg,Hotel room had bedbugs and manager refused refund request,Travel,4,Negative,1,Anger,1,Brown,7,High,0,Unsafe,1,General,6,Low,2,High,0,Hotel Bedbugs Refund,,,Hotel
+sample_148.png,Luggage lost by airline containing all medication and essentials,Travel,4,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Luggage Lost Essentials,,,Luggage
+sample_149.jpg,Rental car broke down in foreign country without assistance,Travel,4,Negative,1,Fear,4,Blue,2,High,0,Unsafe,1,General,6,Low,2,High,0,Rental Car Broke,,,Car
+sample_150.jpg,Passport stolen from hotel safe during supposed secure stay,Travel,4,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,Passport Stolen Hotel,,,Passport
+sample_151.jpg,Tour guide abandoned group in dangerous part of city alone,Travel,4,Negative,1,Fear,4,Grey,5,High,0,Unsafe,1,General,6,Low,2,High,0,Guide Abandoned Group,,,Guide
+sample_152.jpg,Flight turbulence threw passengers around cabin violently,Travel,4,Negative,1,Fear,4,White,4,High,0,Unsafe,1,General,6,Low,2,High,0,Turbulence Passengers Thrown,,,Flight
+sample_153.jpg,Hotel fire alarm malfunctioned waking guests every hour,Travel,4,Negative,1,Anger,1,Yellow,6,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Fire Alarm Malfunctioned,,,Alarm
+sample_154.jpg,Train derailed causing massive delays and safety concerns,Travel,4,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Train Derailed Delays,,,Train
+sample_155.jpg,Cruise ship norovirus outbreak infected hundreds of passengers,Travel,4,Negative,1,Fear,4,Blue,2,High,0,Unsafe,1,General,6,Low,2,High,0,Cruise Norovirus Outbreak,,,Ship
+sample_156.jpg,Visa expired unexpectedly forcing immediate deportation proceedings,Travel,4,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,Visa Expired Deportation,,,Visa
+sample_157.jpg,Travel insurance coverage details seem ambiguous and unclear,Travel,2,Neutral,2,Fear,4,Grey,5,Medium,1,Questionable,2,General,6,Low,2,Medium,1,Insurance Ambiguous Unclear,,,Insurance
+sample_158.jpg,Resort fees added after booking not disclosed upfront originally,Travel,2,Neutral,2,Anger,1,Brown,7,Medium,1,Questionable,2,General,6,Low,2,Medium,1,Resort Fees Hidden,,,Resort
+sample_159.jpg,Local transportation schedule varies by season and holidays,Travel,2,Neutral,2,Trust,2,Green,3,Low,2,Questionable,2,Travelers,4,Medium,1,Low,2,Transportation Schedule Varies,,,Transportation
+sample_160.jpg,Currency exchange rate fluctuates daily based on market conditions,Travel,2,Neutral,2,Trust,2,Yellow,6,Low,2,Questionable,2,Travelers,4,Medium,1,Low,2,Currency Rate Fluctuates,,,Currency
+sample_161.jpg,Tourist attraction closing times change without notice frequently,Travel,2,Neutral,2,Fear,4,Red,0,Medium,1,Questionable,2,Travelers,4,Low,2,Medium,1,Attraction Closures Notice,,,Attraction
+sample_162.jpg,Hotel star rating system appears subjective across different regions,Travel,2,Neutral,2,Trust,2,Blue,2,Low,2,Questionable,2,Travelers,4,Medium,1,Low,2,Hotel Rating Subjective,,,Hotel
+sample_163.jpg,Public WiFi speed adequate for basic browsing but not streaming,Travel,2,Neutral,2,Trust,2,White,4,Medium,1,Questionable,2,Travelers,4,Medium,1,Low,2,Public WiFi Adequate,,,WiFi
+sample_164.jpg,Weather conditions impact flight schedules unpredictably each day,Travel,2,Neutral,2,Trust,2,Grey,5,Low,2,Questionable,2,Travelers,4,Medium,1,Low,2,Weather Flight Schedules,,,Weather
+sample_165.jpg,Passport processing times average six to eight weeks currently,Travel,2,Neutral,2,Trust,2,Black,1,Low,2,Questionable,2,Travelers,4,Medium,1,Low,2,Passport Processing Weeks,,,Passport
+sample_166.jpg,Local cuisine spice levels vary widely between restaurants,Travel,2,Neutral,2,Trust,2,Red,0,Medium,1,Questionable,2,Food Lovers,0,Medium,1,Low,2,Cuisine Spice Varies,,,Cuisine
+sample_167.jpg,Taxi meter rates seem consistent with city regulations posted,Travel,2,Neutral,2,Trust,2,Yellow,6,Low,2,Questionable,2,Travelers,4,Medium,1,Low,2,Taxi Rates Consistent,,,Taxi
+sample_168.jpg,Stock portfolio gained fifteen percent this quarter alone,Finance,5,Positive,0,Excitement,3,Green,3,High,0,Safe,0,Investors,5,High,0,High,0,Stock Portfolio Gained,,,Portfolio
+sample_169.jpg,Credit card rewards program earns double points on groceries,Finance,5,Positive,0,Joy,0,Blue,2,High,0,Safe,0,General,6,High,0,High,0,Credit Card Rewards,,,CreditCard
+sample_170.jpg,Retirement account compound interest working magic over decades,Finance,5,Positive,0,Trust,2,Black,1,Medium,1,Safe,0,Investors,5,Medium,1,Medium,1,Retirement Compound Interest,,,Retirement
+sample_171.jpg,Crypto wallet security features protect assets from hackers,Finance,5,Positive,0,Excitement,3,Grey,5,High,0,Safe,0,Investors,5,High,0,High,0,Crypto Wallet Secure,,,Crypto
+sample_172.jpg,Mortgage rate locked at historic low saving thousands yearly,Finance,5,Positive,0,Joy,0,Red,0,High,0,Safe,0,Professionals,9,High,0,High,0,Mortgage Rate Low,,,Mortgage
+sample_173.jpg,Investment property cash flow positive after six months,Finance,5,Positive,0,Excitement,3,Green,3,High,0,Safe,0,Investors,5,High,0,High,0,Investment Property Cashflow,,,Property
+sample_174.jpg,Savings account APY increased to competitive market rate,Finance,5,Positive,0,Joy,0,Blue,2,Medium,1,Safe,0,General,6,Medium,1,Medium,1,Savings APY Increased,,,Savings
+sample_175.jpg,Insurance claim processed quickly without any hassle involved,Finance,5,Positive,0,Trust,2,White,4,Medium,1,Safe,0,General,6,Medium,1,Medium,1,Insurance Processed Quickly,,,Insurance
+sample_176.jpg,Stock dividend payment arrived exactly on schedule date,Finance,5,Positive,0,Joy,0,Green,3,Medium,1,Safe,0,Investors,5,Medium,1,Medium,1,Dividend Payment Schedule,,,Dividend
+sample_177.jpg,Budgeting app tracks expenses accurately with minimal effort,Finance,5,Positive,0,Excitement,3,Blue,2,High,0,Safe,0,Young Adults,7,High,0,High,0,Budgeting App Accurate,,,App
+sample_178.jpg,Loan approval came through faster than expected timeline,Finance,5,Positive,0,Excitement,3,Black,1,High,0,Safe,0,Professionals,9,High,0,High,0,Loan Approval Fast,,,Loan
+sample_179.jpg,Stock value plummeted eighty percent overnight without warning,Finance,5,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,Stock Plummeted Overnight,,,Stock
+sample_180.jpg,Credit card fraud charged ten thousand dollars unauthorized,Finance,5,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Credit Card Fraud,,,Fraud
+sample_181.pdf,Bank account frozen without explanation or access to funds,Finance,5,Negative,1,Anger,1,Blue,2,High,0,Unsafe,1,General,6,Low,2,High,0,Bank Account Frozen,,,Account
+sample_182.jpg,Investment turned out to be pyramid scheme lost everything,Finance,5,Negative,1,Fear,4,Grey,5,High,0,Unsafe,1,General,6,Low,2,High,0,Pyramid Scheme Lost,,,Investment
+sample_183.jpg,Loan shark harassment continues despite payment plan agreement,Finance,5,Negative,1,Anger,1,Red,0,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Loan Shark Harassment,,,Loan
+sample_184.jpg,Identity stolen banking passwords compromised completely,Finance,5,Negative,1,Fear,4,White,4,High,0,Unsafe,1,General,6,Low,2,High,0,Identity Stolen Passwords,,,Identity
+sample_185.jpg,Mortgage payment doubled due to escrow miscalculation error,Finance,5,Negative,1,Anger,1,Yellow,6,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Mortgage Payment Doubled,,,Mortgage
+sample_186.jpg,Crypto exchange hacked millions stolen no reimbursement offered,Finance,5,Negative,1,Fear,4,Black,1,High,0,Unsafe,1,General,6,Low,2,High,0,Crypto Exchange Hacked,,,Exchange
+sample_187.jpg,Retirement fund manager embezzled funds arrested finally,Finance,5,Negative,1,Anger,1,Blue,2,High,0,Unsafe,1,General,6,Low,2,High,0,Manager Embezzled Funds,,,Manager
+sample_188.jpg,Insurance denied claim after house fire total loss situation,Finance,5,Negative,1,Anger,1,Red,0,High,0,Unsafe,1,General,6,Low,2,High,0,Insurance Denied Claim,,,Insurance
+sample_189.jpg,Tax audit demanded receipts from seven years ago suddenly,Finance,5,Negative,1,Fear,4,Grey,5,Medium,1,Unsafe,1,General,6,Low,2,Medium,1,Tax Audit Receipts,,,Tax
+sample_190.jpg,Interest rates fluctuate based on federal reserve decisions,Finance,2,Neutral,2,Trust,2,Green,3,Medium,1,Questionable,2,Investors,5,Medium,1,Low,2,Interest Rates Fluctuate,,,Rates
+sample_191.jpg,Credit score calculation methodology remains somewhat mysterious,Finance,2,Neutral,2,Fear,4,Black,1,Medium,1,Questionable,2,General,6,Low,2,Medium,1,Credit Score Mysterious,,,Credit
+sample_192.jpg,Bank fees structure appears competitive within current market,Finance,2,Neutral,2,Trust,2,Blue,2,Low,2,Questionable,2,General,6,Medium,1,Low,2,Bank Fees Competitive,,,Bank
+sample_193.jpg,Investment risk disclosure documents seem lengthy and complex,Finance,2,Neutral,2,Trust,2,White,4,Low,2,Questionable,2,Investors,5,Medium,1,Low,2,Risk Disclosure Complex,,,Disclosure
+sample_194.jpg,Loan terms standard for borrowers with similar credit profiles,Finance,2,Neutral,2,Trust,2,Grey,5,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Loan Terms Standard,,,Loan
+sample_195.jpg,Crypto market volatility remains constant daily occurrence,Finance,2,Neutral,2,Fear,4,Red,0,High,0,Questionable,2,Investors,5,Low,2,Medium,1,Crypto Volatility Constant,,,Crypto
+sample_196.jpg,Insurance premium adjustments follow industry wide patterns,Finance,2,Neutral,2,Trust,2,Green,3,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Insurance Premium Patterns,,,Insurance
+sample_197.jpg,Retirement withdrawal penalties apply before age fifty nine,Finance,2,Neutral,2,Trust,2,Blue,2,Low,2,Questionable,2,Investors,5,Medium,1,Low,2,Retirement Penalties Apply,,,Retirement
+sample_198.jpg,Stock market opens at nine thirty eastern standard time,Finance,2,Neutral,2,Trust,2,Black,1,Low,2,Questionable,2,Investors,5,Medium,1,Low,2,Stock Market Opens,,,Market
+sample_199.jpg,Mortgage refinancing process takes approximately thirty days,Finance,2,Neutral,2,Trust,2,Grey,5,Medium,1,Questionable,2,General,6,Medium,1,Low,2,Refinancing Thirty Days,,,Mortgage
+sample_200.jpg,Tax bracket thresholds adjust annually for inflation rates,Finance,2,Neutral,2,Trust,2,Red,0,Low,2,Questionable,2,General,6,Medium,1,Low,2,Tax Brackets Adjust,,,Tax
