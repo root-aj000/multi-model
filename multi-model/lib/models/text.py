@@ -104,6 +104,19 @@ class TextModule(nn.Module):
         self.encoder = AutoModel.from_pretrained(encoder_name)
         self.native_dim: int = self.encoder.config.hidden_size
 
+        # Some transformer implementations (e.g. sdpa) cannot return
+        # attention weights unless attention is run in eager mode.
+        if (
+            self.pooling == "attention_weighted"
+            and getattr(self.encoder.config, "attention_type", None) == "sdpa"
+        ):
+            logger.info(
+                "TextModule: encoder %s uses sdpa attention; switching "
+                "attention_type to 'eager' for attention_weighted pooling.",
+                encoder_name,
+            )
+            self.encoder.config.attention_type = "eager"
+
         # Optional projection (only if caller explicitly requests it)
         if hidden_size is not None and hidden_size != self.native_dim:
             self.projection: Optional[nn.Linear] = nn.Linear(self.native_dim, hidden_size)
@@ -216,6 +229,13 @@ class TextModule(nn.Module):
         Returns:
             (B, dim)
         """
+        if attentions is None:
+            raise ValueError(
+                "attention_weighted pooling requires attention weights from the "
+                "encoder. Ensure the model supports output_attentions=True or use "
+                "pooling='mean' / pooling='cls'."
+            )
+
         # Use the last layer's attention weights
         # Shape: (B, num_heads, seq_len, seq_len)
         last_layer_attn = attentions[-1]
