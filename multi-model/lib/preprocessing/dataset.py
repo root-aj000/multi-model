@@ -215,6 +215,7 @@ def load_dataset(
     return CustomDataset(
         csv_path=paths["csv"],
         image_dir=paths["images"],
+        # image_dir=image_dir,
         label_maps=label_maps,
         image_pipeline=image_pipeline,
         text_pipeline=text_pipeline,

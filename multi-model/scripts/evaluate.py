@@ -84,8 +84,10 @@ def main() -> None:
         max_length = config.get("text_max_length", 256)
 
         # BUG-17 FIX: no redundant default arg in closure
-        def tokenizer_fn(text: str) -> dict:
-            return tokenize_text(text, max_length=max_length, tokenizer=tokenizer)
+        def tokenizer_fn(text: str, max_length_arg: int = None) -> dict:  # ✅ Accepts 2 args
+            # Use the provided max_length_arg, or fall back to the closure's max_length
+            actual_max_length = max_length_arg if max_length_arg is not None else max_length
+            return tokenize_text(text, max_length=actual_max_length, tokenizer=tokenizer)
 
         text_pipeline = build_text_pipeline(clean_text, tokenizer_fn)
 
