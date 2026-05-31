@@ -138,17 +138,21 @@ def load_datasets(config: Dict[str, Any]) -> Tuple[CustomDataset, CustomDataset]
     )
     text_pipeline = _build_text_pipeline(config)
 
+    dataset_root = config.get("DATASET_ROOT") or config.get("dataset_root")
+
     train_dataset = load_dataset(
         "train",
         label_maps=label_maps,
         image_pipeline=train_image_pipeline,
         text_pipeline=text_pipeline,
+        dataset_root=dataset_root,
     )
     val_dataset = load_dataset(
         "val",
         label_maps=label_maps,
         image_pipeline=val_image_pipeline,
         text_pipeline=text_pipeline,
+        dataset_root=dataset_root,
     )
     logger.info(
         "Datasets loaded: train=%d, val=%d (image_size=%s)",

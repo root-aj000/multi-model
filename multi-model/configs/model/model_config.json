@@ -138,6 +138,14 @@
     "BUG-05/10 FIX: all code now reads this value from config (was hardcoded 128 in some places)."
   ],
 
+  "DATASET_ROOT": "/kaggle/input/datasets/anishjagdaleaj/ads-dataset-with-images-2025-2026/dataset",
+  "_comment_DATASET_ROOT": [
+    "Optional path to the dataset root for training and evaluation.",
+    "If set, the code resolves splits from this directory instead of",
+    "the default project-relative 'dataset/' folder.",
+    "Use an absolute path such as the Kaggle input path."
+  ],
+
   "_comment_training": "=== TRAINING HYPERPARAMETERS ===",
   "_comment_training_note": [
     "IMPORTANT: These keys must be at the TOP LEVEL of this file.",

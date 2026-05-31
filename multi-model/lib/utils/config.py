@@ -50,9 +50,10 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
-def get_dataset_paths(split: str) -> Dict[str, Path]:
+def get_dataset_paths(split: str, dataset_root: Optional[str] = None) -> Dict[str, Path]:
     """
-    Get file paths for a dataset split, anchored to the project root.
+    Get file paths for a dataset split, anchored to the project root or a
+    custom dataset root.
 
     BUG-22 FIX: Previously used a bare relative path ("dataset/split"),
     which broke whenever the script was run from a directory other than
@@ -60,11 +61,26 @@ def get_dataset_paths(split: str) -> Dict[str, Path]:
 
     Args:
         split: Dataset split name — "train", "val", or "test".
+        dataset_root: Optional base dataset path. If provided and not
+            absolute, it is resolved relative to the project root.
+            Supports either:
+              - base dataset root containing split subdirectories
+                (e.g. /path/to/dataset/)
+              - direct split folder path
+                (e.g. /path/to/dataset/train)
 
     Returns:
         Dict with keys "csv" and "images" pointing to absolute Paths.
     """
-    root = _PROJECT_ROOT / "dataset" / split
+    if dataset_root:
+        root = Path(dataset_root)
+        if not root.is_absolute():
+            root = _PROJECT_ROOT / root
+        if (root / split).exists():
+            root = root / split
+    else:
+        root = _PROJECT_ROOT / "dataset" / split
+
     return {
         "csv": root / f"{split}.csv",
         "images": root / "images",

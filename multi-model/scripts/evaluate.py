@@ -91,11 +91,13 @@ def main() -> None:
 
         text_pipeline = build_text_pipeline(clean_text, tokenizer_fn)
 
+    dataset_root = config.get("DATASET_ROOT") or config.get("dataset_root")
     dataset = load_dataset(
         args.split,
         label_maps=label_maps,
         image_pipeline=image_pipeline,
         text_pipeline=text_pipeline,
+        dataset_root=dataset_root,
     )
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 

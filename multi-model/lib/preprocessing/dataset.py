@@ -190,13 +190,15 @@ def load_dataset(
     label_maps: Dict[str, List[str]],
     image_pipeline=None,
     text_pipeline=None,
+    dataset_root: Optional[str] = None,
 ) -> CustomDataset:
     """
     Load a dataset for the given split.
 
-    Expects the directory structure:
+    Expects either the default directory structure:
         dataset/{split}/{split}.csv
         dataset/{split}/images/
+    or a custom dataset root provided through config.
 
     Args:
         split: One of 'train', 'val', 'test'.
@@ -204,6 +206,8 @@ def load_dataset(
             used to encode CSV string labels to integer class indices.
         image_pipeline: Optional image transform callable.
         text_pipeline: Optional text transform callable.
+        dataset_root: Optional base dataset path. If provided and not absolute,
+            it is resolved relative to the project root.
 
     Returns:
         CustomDataset instance.
@@ -211,11 +215,10 @@ def load_dataset(
     Raises:
         FileNotFoundError: If CSV or image directory does not exist.
     """
-    paths = get_dataset_paths(split)
+    paths = get_dataset_paths(split, dataset_root)
     return CustomDataset(
         csv_path=paths["csv"],
         image_dir=paths["images"],
-        # image_dir=image_dir,
         label_maps=label_maps,
         image_pipeline=image_pipeline,
         text_pipeline=text_pipeline,
