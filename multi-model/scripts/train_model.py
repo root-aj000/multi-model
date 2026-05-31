@@ -9,6 +9,8 @@ saves the best model checkpoint.
 import argparse
 import logging
 import os
+import re
+from pathlib import Path
 
 import torch
 
@@ -30,6 +32,42 @@ DEFAULT_BASE_LR = 0.001
 
 # Default configuration file path
 DEFAULT_CONFIG_PATH = "configs/model/model_config.json"
+
+BEST_CHECKPOINT_PATTERN = re.compile(
+    r"^best_model_epoch_(\d+)(?:_acc_([0-9]+\.[0-9]+))?\.pt$"
+)
+
+
+def _find_best_checkpoints(save_dir: Path):
+    checkpoints = []
+    for path in save_dir.glob("best_model_epoch_*.pt"):
+        match = BEST_CHECKPOINT_PATTERN.match(path.name)
+        if not match:
+            continue
+        epoch = int(match.group(1))
+        accuracy = float(match.group(2)) if match.group(2) else -1.0
+        checkpoints.append((path, epoch, accuracy))
+    return checkpoints
+
+
+def _prune_best_checkpoints(save_dir: Path, keep: int = 2) -> None:
+    checkpoints = _find_best_checkpoints(save_dir)
+    if len(checkpoints) <= keep:
+        return
+
+    # Keep the top-N checkpoints by validation accuracy, breaking ties by epoch.
+    sorted_checkpoints = sorted(
+        checkpoints,
+        key=lambda item: (item[2], item[1]),
+        reverse=True,
+    )
+    to_remove = sorted_checkpoints[keep:]
+    for path, _, _ in to_remove:
+        try:
+            path.unlink()
+            logger.info("Removed old checkpoint: %s", path)
+        except OSError as exc:
+            logger.warning("Failed to remove checkpoint %s: %s", path, exc)
 
 
 def main() -> None:
@@ -141,13 +179,13 @@ def main() -> None:
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
             epochs_without_improvement = 0
-            os.makedirs("saved_models", exist_ok=True)
-            # BUG-16 FIX: include epoch number in filename so it is consistent
-            # with the existing saved_models/best_model_epoch_N.pt convention.
-            best_path = f"saved_models/best_model_epoch_{epoch + 1}.pt"
-            best_tmp = f"{best_path}.tmp"
+            save_dir = Path("saved_models")
+            save_dir.mkdir(parents=True, exist_ok=True)
+            best_path = save_dir / f"best_model_epoch_{epoch + 1}_acc_{val_accuracy:.4f}.pt"
+            best_tmp = save_dir / f"{best_path.name}.tmp"
             torch.save(model.state_dict(), best_tmp)
             os.replace(best_tmp, best_path)
+            _prune_best_checkpoints(save_dir, keep=2)
             print(f"  -> Saved best model to {best_path}")
         else:
             epochs_without_improvement += 1
