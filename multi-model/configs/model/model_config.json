@@ -1,0 +1,300 @@
+{
+  "_comment_architecture": "=== MODEL ARCHITECTURE ===",
+
+  "IMAGE_BACKBONE": "resnet50",
+  "_comment_IMAGE_BACKBONE": [
+    "Visual backbone. Options:",
+    "  ResNet  : resnet18, resnet50",
+    "  EfficientNet: efficientnet_b0, efficientnet_b3, efficientnet_b7",
+    "  ConvNeXt: convnext_tiny, convnext_small, convnext_base",
+    "Changing this requires retraining from scratch."
+  ],
+
+  "TEXT_ENCODER": "distilbert-base-uncased",
+  "_comment_TEXT_ENCODER": [
+    "HuggingFace transformer encoder. Options:",
+    "  distilbert-base-uncased  (faster, slightly lower accuracy)",
+    "  bert-base-uncased        (slower, slightly higher accuracy)",
+    "Any valid HuggingFace model identifier is accepted."
+  ],
+
+  "TEXT_POOLING": "attention_weighted",
+  "_comment_TEXT_POOLING": [
+    "How to pool transformer token representations into a single vector.",
+    "",
+    "  attention_weighted  ← RECOMMENDED",
+    "      Weight each token by its average self-attention score from the",
+    "      encoder's final layer, then take a weighted sum.",
+    "      Tokens the model already focuses on (keywords, prices, brand names)",
+    "      contribute more. Padding tokens get near-zero weight automatically.",
+    "      No extra parameters — uses the encoder's own learned attention.",
+    "      Estimated gain over mean: +1-3% accuracy.",
+    "",
+    "  mean",
+    "      Average all non-padding tokens equally.",
+    "      Better than CLS for most tasks. Slight noise from low-importance tokens.",
+    "",
+    "  cls",
+    "      Use only the [CLS] token.",
+    "      Fast. Standard for BERT sentence classification.",
+    "      Ignores word-level information.",
+    "",
+    "Issue 7 fix: attention_weighted pooling implemented and set as default."
+  ],
+
+  "FUSION_TYPE": "attention",
+  "_comment_FUSION_TYPE": [
+    "How to fuse visual and text features. Options:",
+    "  attention : RECOMMENDED — full bidirectional cross-modal MHA.",
+    "              Visual attends to text AND text attends to visual.",
+    "              Both modalities keep their native dimensions until fusion.",
+    "              Adds CrossModalAttention module (see fg_mfn.py).",
+    "  concat    : concatenate native vectors → Linear(v_dim+t_dim, HIDDEN_DIM).",
+    "              Simple and fast, no attention parameters.",
+    "  add       : element-wise sum → Linear(dim, HIDDEN_DIM).",
+    "              Only valid when visual_dim == text_dim (rare).",
+    "Change this key only — no code changes needed."
+  ],
+
+  "HIDDEN_DIM": 512,
+  "_comment_HIDDEN_DIM": [
+    "Output dimension of the shared FC and all classification heads.",
+    "This is NOT the dimension of the visual or text encoders — those",
+    "keep their native dimensions (e.g. 2048 for ResNet-50, 768 for BERT).",
+    "The projection to HIDDEN_DIM happens AFTER cross-modal attention,",
+    "so no information is discarded before the modalities interact."
+  ],
+
+  "ATTENTION_DIM": 768,
+  "_comment_ATTENTION_DIM": [
+    "Internal Q/K/V dimension for cross-modal attention.",
+    "Only used when FUSION_TYPE = 'attention'.",
+    "Both visual (e.g. 2048) and text (e.g. 768) are projected to this",
+    "dimension before multi-head attention is computed.",
+    "Must be divisible by ATTENTION_HEADS.",
+    "",
+    "Issue 11 fix: changed from 512 to 768.",
+    "  512 caused a 50% compression of the text branch (768→512) before",
+    "  attention, discarding information unnecessarily.",
+    "  768 = native DistilBERT/BERT dimension, so text is not compressed at all.",
+    "  Visual (2048→768) is still compressed but that is unavoidable.",
+    "  After attention: [v_out(768); t_out(768)] → Linear(1536, HIDDEN_DIM=512).",
+    "  This is a single well-conditioned projection, not a bottleneck.",
+    "",
+    "If you switch to bert-large (native_dim=1024), set ATTENTION_DIM=1024.",
+    "Rule of thumb: ATTENTION_DIM >= text encoder native_dim."
+  ],
+
+  "ATTENTION_HEADS": 8,
+  "_comment_ATTENTION_HEADS": [
+    "Number of attention heads in cross-modal MHA.",
+    "Only used when FUSION_TYPE = 'attention'.",
+    "Must divide ATTENTION_DIM evenly: ATTENTION_DIM % ATTENTION_HEADS == 0.",
+    "Each head operates on ATTENTION_DIM / ATTENTION_HEADS = 64 dims.",
+    "More heads = finer-grained cross-modal alignment.",
+    "Typical values: 4, 8 (default), 16."
+  ],
+
+  "DROPOUT": 0.1,
+  "_comment_DROPOUT": "Dropout probability in [0, 1). Applied in shared FC layers.",
+
+  "FREEZE_BACKBONE": false,
+  "_comment_FREEZE_BACKBONE": [
+    "If true, freeze the pretrained visual backbone convolutional weights.",
+    "The new projection head (fc/classifier) always remains trainable.",
+    "BUG-23 FIX: previously froze the head too, preventing it from training."
+  ],
+
+  "DEEP_SHARED_LAYER": true,
+  "_comment_DEEP_SHARED_LAYER": [
+    "If true, use a two-layer shared FC after fusion:",
+    "  fusion_dim → HIDDEN_DIM → HIDDEN_DIM",
+    "If false, use a single layer: fusion_dim → HIDDEN_DIM"
+  ],
+
+  "_comment_image": "=== IMAGE PREPROCESSING ===",
+
+  "image_size": [224 , 224],
+  "_comment_image_size": [
+    "Input image size as [width, height]. Must match what the backbone expects.",
+    "Recommended sizes by backbone:",
+    "  resnet18/50      : [224,224] or [512,512]",
+    "  efficientnet_b0  : [224,224]",
+    "  efficientnet_b3  : [300,300]",
+    "  efficientnet_b7  : [600,600]",
+    "  convnext_*       : [224,224] or [384,384]",
+    "BUG-09 FIX: image/pipeline.py now uses this value (not a hardcoded 224)."
+  ],
+
+  "_comment_text": "=== TEXT PREPROCESSING ===",
+
+  "use_text": true,
+  "_comment_use_text": "Set to false to disable the text branch entirely.",
+
+  "text_max_length": 256,
+  "_comment_text_max_length": [
+    "Maximum token sequence length for the text encoder.",
+    "Must be consistent across training, validation, and inference.",
+    "BUG-05/10 FIX: all code now reads this value from config (was hardcoded 128 in some places)."
+  ],
+
+  "_comment_training": "=== TRAINING HYPERPARAMETERS ===",
+  "_comment_training_note": [
+    "IMPORTANT: These keys must be at the TOP LEVEL of this file.",
+    "Do NOT nest them under a 'model' key.",
+    "BUG-28 NOTE: setup_training_components reads from the top-level config."
+  ],
+
+  "learning_rate": 2e-4,
+  "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC).",
+
+  "encoder_learning_rate": 1e-5,
+  "_comment_encoder_learning_rate": [
+    "LR for the pretrained text encoder (text_module.encoder).",
+    "Should be ~10-25x lower than learning_rate to avoid catastrophic forgetting."
+  ],
+
+  "weight_decay": 0.01,
+  "_comment_weight_decay": [
+    "L2 regularisation applied to non-bias, non-LayerNorm parameters.",
+    "Bias and LayerNorm weights always have weight_decay=0 (standard BERT recipe).",
+    "BUG-02 FIX: no longer passed as a global AdamW arg (was redundant)."
+  ],
+
+  "batch_size": 32,
+  "_comment_batch_size": [
+    "Training and validation batch size.",
+    "BUG-07 FIX: train DataLoader uses drop_last=True so the last batch",
+    "is never smaller than batch_size (prevents BatchNorm crash on batch=1)."
+  ],
+
+  "epochs": 100,
+  "_comment_epochs": "Total number of training epochs.",
+
+  "warmup_epochs": 5,
+  "_comment_warmup_epochs": [
+    "Number of linear LR warmup epochs at the start of training.",
+    "LR ramps from near-zero to learning_rate over this many epochs.",
+    "Set to 0 to disable warmup.",
+    "BUG-01 FIX: warmup is handled by SequentialLR+LinearLR in pipeline.py.",
+    "The old apply_warmup() function has been removed."
+  ],
+
+  "mixup_alpha": 0.2,
+  "_comment_mixup_alpha": [
+    "Mixup Beta distribution parameter. 0 disables Mixup.",
+    "Typical values: 0.1–0.4. Higher = more aggressive mixing.",
+    "BUG-04 FIX: training accuracy is now computed against labels_a",
+    "(the dominant label) rather than the blended label dict."
+  ],
+
+  "_comment_scheduler": "=== LEARNING RATE SCHEDULER ===",
+
+  "scheduler_type": "cosine",
+  "_comment_scheduler_type": [
+    "LR decay schedule after warmup. Options:",
+    "  cosine : CosineAnnealingLR from warmup_end to epoch N (recommended)",
+    "  step   : StepLR — multiply LR by scheduler_gamma every scheduler_step_size epochs"
+  ],
+
+  "scheduler_eta_min": 1e-6,
+  "_comment_scheduler_eta_min": "Minimum LR for cosine scheduler. Only used when scheduler_type = 'cosine'.",
+
+  "scheduler_step_size": 30,
+  "_comment_scheduler_step_size": "Decay interval in epochs. Only used when scheduler_type = 'step'.",
+
+  "scheduler_gamma": 0.1,
+  "_comment_scheduler_gamma": "LR multiplier per step. Only used when scheduler_type = 'step'.",
+
+  "_comment_class_weights": "=== CLASS WEIGHTS (optional) ===",
+  "_comment_class_weights_note": [
+    "Per-attribute class weights for CrossEntropyLoss.",
+    "Use when your dataset is class-imbalanced (very common for multi-class attributes).",
+    "Compute from training CSV: weight[i] = total_samples / (num_classes * count[i])",
+    "BUG-25 NOTE: Without class weights the model will over-predict majority classes.",
+    "Example (uncomment and fill in real values):",
+    "  'CLASS_WEIGHTS': {",
+    "    'theme': [1.2, 0.8, 1.5, 0.9, 1.1, 0.7, 1.3, 0.6, 1.4],",
+    "    'sentiment': [1.0, 0.9, 1.1]",
+    "  }"
+  ],
+
+  "_comment_augmentation": "=== DATA AUGMENTATION ===",
+
+  "augmentation": {
+    "_comment": "Applied to training images only. Validation/test images are never augmented.",
+
+    "horizontal_flip_prob": 0.5,
+    "_comment_hflip": "Probability of random horizontal flip.",
+
+    "vertical_flip_prob": 0.0,
+    "_comment_vflip": "Probability of random vertical flip (low for ads).",
+
+    "rotation_degrees": 15,
+    "_comment_rotation": "Max rotation angle in degrees. Applied with probability 0.4.",
+
+    "color_jitter": {
+      "brightness": 0.15,
+      "_comment_brightness": "Brightness jitter factor. 0 disables.",
+      "contrast": 0.1,
+      "_comment_contrast": "Contrast jitter factor. 0 disables.",
+      "saturation": 0.1,
+      "_comment_saturation": "Saturation jitter factor. 0 disables.",
+      "hue": 0.02,
+      "_comment_hue": [
+        "Hue rotation as a fraction of the full circle [0, 0.5].",
+        "0.05 = ±18° rotation. Applied with probability 0.3.",
+        "BUG-13 FIX: now performs a real HSV hue rotation (not additive RGB shift)."
+      ]
+    },
+
+    "random_crop_scale": [0.95, 1.0],
+    "_comment_crop_scale": "Range of crop area relative to original. Applied with probability 0.5.",
+
+    "random_crop_ratio": [0.9, 1.1],
+    "_comment_crop_ratio": "Range of crop aspect ratio relative to original."
+  },
+
+  "_comment_attributes": "=== CLASSIFICATION ATTRIBUTES ===",
+
+  "ATTRIBUTES": {
+    "theme": {
+      "num_classes": 9,
+      "labels": ["Automotive", "Education", "Fashion", "Finance", "Food", "Gaming", "Home", "Tech", "Travel"]
+    },
+    "sentiment": {
+      "num_classes": 3,
+      "labels": ["Negative", "Neutral", "Positive"]
+    },
+    "emotion": {
+      "num_classes": 5,
+      "labels": ["Anger", "Excitement", "Fear", "Joy", "Trust"]
+    },
+    "dominant_colour": {
+      "num_classes": 8,
+      "labels": ["Black", "Blue", "Brown", "Green", "Grey", "Red", "White", "Yellow"]
+    },
+    "attention_score": {
+      "num_classes": 3,
+      "labels": ["High", "Low", "Medium"]
+    },
+    "trust_safety": {
+      "num_classes": 3,
+      "labels": ["Questionable", "Safe", "Unsafe"]
+    },
+    "target_audience": {
+      "num_classes": 6,
+      "labels": ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"]
+    },
+    "predicted_ctr": {
+      "num_classes": 3,
+      "labels": ["High", "Low", "Medium"]
+    },
+    "likelihood_shares": {
+      "num_classes": 3,
+      "labels": ["High", "Low", "Medium"]
+    }
+  }
+}
+
+
