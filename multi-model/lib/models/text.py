@@ -106,16 +106,15 @@ class TextModule(nn.Module):
 
         # Some transformer implementations (e.g. sdpa) cannot return
         # attention weights unless attention is run in eager mode.
-        if (
-            self.pooling == "attention_weighted"
-            and getattr(self.encoder.config, "attention_type", None) == "sdpa"
-        ):
-            logger.info(
-                "TextModule: encoder %s uses sdpa attention; switching "
-                "attention_type to 'eager' for attention_weighted pooling.",
-                encoder_name,
-            )
-            self.encoder.config.attention_type = "eager"
+        if self.pooling == "attention_weighted":
+            self.encoder.config.output_attentions = True
+            if getattr(self.encoder.config, "attention_type", None) == "sdpa":
+                logger.info(
+                    "TextModule: encoder %s uses sdpa attention; switching "
+                    "attention_type to 'eager' for attention_weighted pooling.",
+                    encoder_name,
+                )
+                self.encoder.config.attention_type = "eager"
 
         # Optional projection (only if caller explicitly requests it)
         if hidden_size is not None and hidden_size != self.native_dim:
@@ -170,9 +169,17 @@ class TextModule(nn.Module):
         last_hidden = outputs.last_hidden_state  # (B, seq_len, native_dim)
 
         if self.pooling == "attention_weighted":
-            pooled = self._attention_weighted_pool(
-                last_hidden, attention_mask, outputs.attentions
-            )
+            if outputs.attentions is None:
+                logger.warning(
+                    "TextModule: encoder %s did not return attentions for "
+                    "attention_weighted pooling; falling back to mean pooling.",
+                    self.encoder_name,
+                )
+                pooled = self._mean_pool(last_hidden, attention_mask)
+            else:
+                pooled = self._attention_weighted_pool(
+                    last_hidden, attention_mask, outputs.attentions
+                )
         elif self.pooling == "mean":
             pooled = self._mean_pool(last_hidden, attention_mask)
         else:
