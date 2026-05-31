@@ -107,14 +107,14 @@ class TextModule(nn.Module):
         # Some transformer implementations (e.g. sdpa) cannot return
         # attention weights unless attention is run in eager mode.
         if self.pooling == "attention_weighted":
-            self.encoder.config.output_attentions = True
             if getattr(self.encoder.config, "attention_type", None) == "sdpa":
                 logger.info(
                     "TextModule: encoder %s uses sdpa attention; switching "
-                    "attention_type to 'eager' for attention_weighted pooling.",
+                    "attn_implementation to 'eager' for attention_weighted pooling.",
                     encoder_name,
                 )
-                self.encoder.config.attention_type = "eager"
+                self.encoder.config.attn_implementation = "eager"
+            self.encoder.config.output_attentions = True
 
         # Optional projection (only if caller explicitly requests it)
         if hidden_size is not None and hidden_size != self.native_dim:
