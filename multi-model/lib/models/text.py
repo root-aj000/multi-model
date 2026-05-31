@@ -86,9 +86,15 @@ class TextModule(nn.Module):
         super().__init__()
 
         if not isinstance(encoder_name, str):
-            raise TypeError(f"encoder_name must be str, got {type(encoder_name).__name__}")
-        if hidden_size is not None and (not isinstance(hidden_size, int) or hidden_size <= 0):
-            raise ValueError(f"hidden_size must be a positive int, got {hidden_size}")
+            raise TypeError(
+                f"encoder_name must be str, got {type(encoder_name).__name__}"
+            )
+        if hidden_size is not None and (
+            not isinstance(hidden_size, int) or hidden_size <= 0
+        ):
+            raise ValueError(
+                f"hidden_size must be a positive int, got {hidden_size}"
+            )
         if pooling not in SUPPORTED_POOLING:
             raise ValueError(
                 f"pooling must be one of {SUPPORTED_POOLING}, got '{pooling}'"
@@ -97,42 +103,79 @@ class TextModule(nn.Module):
         self.encoder_name = encoder_name
         self.pooling = pooling
 
+        # ------------------------------------------------------------------
         # Load encoder.
-        # attention_weighted pooling needs output_attentions=True at forward time,
-        # but we don't set it here — we pass it per-call so the model can also
-        # be used without attention output when pooling != "attention_weighted".
-        self.encoder = AutoModel.from_pretrained(encoder_name)
+        #
+        # For attention_weighted pooling we MUST be able to retrieve attention
+        # weights at forward time (output_attentions=True).  The sdpa
+        # (scaled-dot-product-attention) kernel in PyTorch ≥2.0 does not
+        # support returning attention weights, so HuggingFace raises a
+        # ValueError if you try to set output_attentions=True on a model
+        # that was loaded with attn_implementation="sdpa".
+        #
+        # The correct fix is to load the model upfront with
+        # attn_implementation="eager" so that attention weights are always
+        # available.  Patching config attributes after loading does not work
+        # because the kernel choice is already compiled into the module graph.
+        # ------------------------------------------------------------------
+        if pooling == "attention_weighted":
+            logger.info(
+                "TextModule: loading %s with attn_implementation='eager' "
+                "because attention_weighted pooling requires attention weights.",
+                encoder_name,
+            )
+            try:
+                self.encoder = AutoModel.from_pretrained(
+                    encoder_name,
+                    attn_implementation="eager",
+                )
+            except (TypeError, ValueError) as exc:
+                # Older model configs / transformers versions may not accept
+                # the attn_implementation kwarg — fall back gracefully.
+                logger.warning(
+                    "TextModule: could not load %s with "
+                    "attn_implementation='eager' (%s). "
+                    "Falling back to default load; attention_weighted pooling "
+                    "may silently degrade to mean pooling if attentions are "
+                    "unavailable.",
+                    encoder_name,
+                    exc,
+                )
+                self.encoder = AutoModel.from_pretrained(encoder_name)
+        else:
+            # For cls / mean pooling we don't need attention weights at all,
+            # so let HuggingFace pick the fastest available implementation.
+            self.encoder = AutoModel.from_pretrained(encoder_name)
+
         self.native_dim: int = self.encoder.config.hidden_size
 
-        # Some transformer implementations (e.g. sdpa) cannot return
-        # attention weights unless attention is run in eager mode.
-        if self.pooling == "attention_weighted":
-            if getattr(self.encoder.config, "attention_type", None) == "sdpa":
-                logger.info(
-                    "TextModule: encoder %s uses sdpa attention; switching "
-                    "attn_implementation to 'eager' for attention_weighted pooling.",
-                    encoder_name,
-                )
-                self.encoder.config.attn_implementation = "eager"
-            self.encoder.config.output_attentions = True
-
+        # ------------------------------------------------------------------
         # Optional projection (only if caller explicitly requests it)
+        # ------------------------------------------------------------------
         if hidden_size is not None and hidden_size != self.native_dim:
-            self.projection: Optional[nn.Linear] = nn.Linear(self.native_dim, hidden_size)
+            self.projection: Optional[nn.Linear] = nn.Linear(
+                self.native_dim, hidden_size
+            )
             self.out_features: int = hidden_size
             logger.info(
                 "TextModule: %s native_dim=%d → projected to %d, pooling=%s",
-                encoder_name, self.native_dim, hidden_size, pooling,
+                encoder_name,
+                self.native_dim,
+                hidden_size,
+                pooling,
             )
         else:
             self.projection = None
             self.out_features = self.native_dim
             logger.info(
                 "TextModule: %s native_dim=%d (no projection), pooling=%s",
-                encoder_name, self.native_dim, pooling,
+                encoder_name,
+                self.native_dim,
+                pooling,
             )
 
-        # Backward-compat alias (feature_extractor.py uses self.text_module.hidden_size)
+        # Backward-compat alias (feature_extractor.py uses
+        # self.text_module.hidden_size)
         self.hidden_size = self.out_features
 
     # ------------------------------------------------------------------
@@ -154,11 +197,13 @@ class TextModule(nn.Module):
         """
         if input_ids.shape != attention_mask.shape:
             raise ValueError(
-                f"input_ids {input_ids.shape} != attention_mask {attention_mask.shape}"
+                f"input_ids {input_ids.shape} != "
+                f"attention_mask {attention_mask.shape}"
             )
 
-        # Request attention weights only when needed (saves ~5% compute otherwise)
-        need_attentions = (self.pooling == "attention_weighted")
+        # Request attention weights only when needed (saves ~5% compute
+        # otherwise).
+        need_attentions = self.pooling == "attention_weighted"
 
         outputs = self.encoder(
             input_ids=input_ids,
@@ -170,6 +215,8 @@ class TextModule(nn.Module):
 
         if self.pooling == "attention_weighted":
             if outputs.attentions is None:
+                # The model was loaded without eager attention — degrade
+                # gracefully rather than crashing at inference time.
                 logger.warning(
                     "TextModule: encoder %s did not return attentions for "
                     "attention_weighted pooling; falling back to mean pooling.",
@@ -210,7 +257,7 @@ class TextModule(nn.Module):
         Returns:
             (B, dim)
         """
-        mask = attention_mask.unsqueeze(-1).float()          # (B, seq_len, 1)
+        mask = attention_mask.unsqueeze(-1).float()  # (B, seq_len, 1)
         return (last_hidden * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
 
     @staticmethod
@@ -238,9 +285,9 @@ class TextModule(nn.Module):
         """
         if attentions is None:
             raise ValueError(
-                "attention_weighted pooling requires attention weights from the "
-                "encoder. Ensure the model supports output_attentions=True or use "
-                "pooling='mean' / pooling='cls'."
+                "attention_weighted pooling requires attention weights from "
+                "the encoder. Ensure the model supports output_attentions=True"
+                " or use pooling='mean' / pooling='cls'."
             )
 
         # Use the last layer's attention weights
