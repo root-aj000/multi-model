@@ -10,7 +10,7 @@
     "Changing this requires retraining from scratch."
   ],
 
-  "TEXT_ENCODER": "distilbert-base-uncased",
+  "TEXT_ENCODER": "bert-base-uncased",
   "_comment_TEXT_ENCODER": [
     "HuggingFace transformer encoder. Options:",
     "  distilbert-base-uncased  (faster, slightly lower accuracy)",
@@ -91,7 +91,7 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
-  "DROPOUT": 0.1,
+  "DROPOUT": 0.3,
   "_comment_DROPOUT": "Dropout probability in [0, 1). Applied in shared FC layers.",
 
   "FREEZE_BACKBONE": false,
@@ -151,10 +151,10 @@
     "BUG-28 NOTE: setup_training_components reads from the top-level config."
   ],
 
-  "learning_rate": 2e-4,
+  "learning_rate": 1e-4,
   "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC).",
 
-  "encoder_learning_rate": 1e-5,
+  "encoder_learning_rate": 5e-6,
   "_comment_encoder_learning_rate": [
     "LR for the pretrained text encoder (text_module.encoder).",
     "Should be ~10-25x lower than learning_rate to avoid catastrophic forgetting."
@@ -187,7 +187,7 @@
   "epochs": 100,
   "_comment_epochs": "Total number of training epochs.",
 
-  "warmup_epochs": 5,
+  "warmup_epochs": 15,
   "_comment_warmup_epochs": [
     "Number of linear LR warmup epochs at the start of training.",
     "LR ramps from near-zero to learning_rate over this many epochs.",
@@ -195,7 +195,7 @@
     "BUG-01 FIX: warmup is handled by SequentialLR+LinearLR in pipeline.py."
   ],
 
-  "mixup_alpha": 0.2,
+  "mixup_alpha": 0.3,
   "_comment_mixup_alpha": [
     "Mixup Beta distribution parameter. 0 disables Mixup.",
     "Typical values: 0.1-0.4. Higher = more aggressive mixing.",
@@ -203,7 +203,7 @@
     "(the dominant label) rather than the blended label dict."
   ],
 
-  "early_stopping_patience": 5,
+  "early_stopping_patience": 15,
   "_comment_early_stopping_patience": [
     "Stop training if val accuracy does not improve for this many consecutive epochs.",
     "Set to 0 to disable early stopping.",
