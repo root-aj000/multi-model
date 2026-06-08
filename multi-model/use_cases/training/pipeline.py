@@ -308,8 +308,8 @@ def setup_training_components(
     """
     optimizer = _build_optimizer(model, cfg)
 
-    epochs = cfg.get("epochs", 100)
-    warmup_epochs = cfg.get("warmup_epochs", 5)
+    epochs = cfg.get("epochs")
+    warmup_epochs = cfg.get("warmup_epochs")
 
     scheduler_type = cfg.get("scheduler_type", "cosine")
     if scheduler_type == "cosine":
