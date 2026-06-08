@@ -176,10 +176,10 @@
     "is never smaller than batch_size (prevents BatchNorm crash on batch=1)."
   ],
 
-  "epochs": 3,
+  "epochs": 100,
   "_comment_epochs": "Total number of training epochs.",
 
-  "warmup_epochs": 1,
+  "warmup_epochs": 5,
   "_comment_warmup_epochs": [
     "Number of linear LR warmup epochs at the start of training.",
     "LR ramps from near-zero to learning_rate over this many epochs.",
