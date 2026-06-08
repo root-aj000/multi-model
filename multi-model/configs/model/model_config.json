@@ -136,7 +136,7 @@
     "Used by: pipeline.py, train_model.py script, evaluate.py, predict_image.py, tokenizer.py"
   ],
 
-  "DATASET_ROOT": "/kaggle/input/datasets/anishjagdaleaj/ads-dataset-with-images-2025-2026/dataset",
+  "DATASET_ROOT": "/kaggle/input/datasets/anishjagdaleaj/ads-dataset-with-images-2025-2026-v1/dataset",
   "_comment_DATASET_ROOT": [
     "Optional path to the dataset root for training and evaluation.",
     "If set, the code resolves splits from this directory instead of",
