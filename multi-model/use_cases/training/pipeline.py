@@ -217,6 +217,11 @@ def _build_optimizer(
     global value was redundant and could silently override the 0.0 entries
     in the no-decay groups if PyTorch's behaviour ever changes.
 
+    DataParallel note: when the model is wrapped with nn.DataParallel,
+    named_parameters() adds a "module." prefix to all names. This function
+    strips that prefix before matching so encoder detection works correctly
+    regardless of whether DataParallel is active.
+
     Args:
         model: The FG_MFN model.
         cfg:   Configuration dict with learning rate settings.
@@ -239,8 +244,11 @@ def _build_optimizer(
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        is_encoder = name.startswith("text_module.encoder")
-        no_decay = any(name.endswith(sfx) for sfx in no_decay_suffixes)
+        # Strip DataParallel's "module." prefix so name matching works
+        # regardless of whether the model is wrapped or not.
+        bare_name = name[len("module."):] if name.startswith("module.") else name
+        is_encoder = bare_name.startswith("text_module.encoder")
+        no_decay = any(bare_name.endswith(sfx) for sfx in no_decay_suffixes)
 
         if is_encoder:
             (encoder_no_decay if no_decay else encoder_decay).append(param)
