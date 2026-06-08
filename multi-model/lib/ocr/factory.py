@@ -32,6 +32,10 @@ def create_ocr_engine(
         model_dir: Directory to store model files.
         **kwargs: Additional keyword arguments for engine initialization.
             For EasyOCR, 'languages' is accepted as a list of language codes.
+            For PaddleOCR, 'language' is accepted as a string (e.g. 'en').
+            Both default to English if not provided.
+            Language is read from model_config.json (ocr.language) by the
+            caller (prediction/pipeline.py) and passed in here.
 
     Returns:
         An instance of OCREngine.
@@ -46,8 +50,9 @@ def create_ocr_engine(
         return engine
 
     if engine_name == "paddleocr":
-        engine = PaddleOCREngine(model_dir)
-        logger.info("Created PaddleOCR engine with model_dir=%s", model_dir)
+        language = kwargs.get("language", "en")
+        engine = PaddleOCREngine(model_dir, language=language)
+        logger.info("Created PaddleOCR engine with model_dir=%s, language=%s", model_dir, language)
         return engine
 
     raise ValueError(

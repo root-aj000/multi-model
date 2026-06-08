@@ -2,7 +2,8 @@
 EasyOCR engine implementation.
 
 Provides an OCR engine backed by the EasyOCR library for extracting
-text from images with confidence scores.
+text from images with confidence scores. Language defaults to ['en']
+and is set from model_config.json (ocr.language) by the caller.
 """
 
 import logging
@@ -13,9 +14,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from lib.ocr.engine import OCREngine
 
 logger = logging.getLogger(__name__)
-
-# Default language codes for EasyOCR
-DEFAULT_LANGUAGES = ["en"]
 
 # Minimum number of results to consider a valid extraction
 MINIMUM_RESULTS_FOR_CONFIDENCE = 1
@@ -39,13 +37,14 @@ class EasyOCREngine(OCREngine):
 
         Args:
             model_dir: Directory to store EasyOCR model files.
-            languages: List of language codes to load. Defaults to ['en'].
+            languages: List of language codes to load.
+                       Read from config (ocr.language); defaults to ['en'].
 
         Raises:
             TypeError: If model_dir is not a Path or languages is not a list.
         """
         self.model_dir = Path(model_dir)
-        self.languages = languages if languages is not None else list(DEFAULT_LANGUAGES)
+        self.languages = languages if languages is not None else ["en"]
         self.reader = None
         self._init_engine()
 

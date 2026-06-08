@@ -9,6 +9,10 @@ BUG-07 FIX: train DataLoader now uses drop_last=True to prevent single-sample
 BUG-12 FIX: _get_image_size logs a warning when the config value is invalid
             instead of silently falling back.
 BUG-17 FIX: tokenizer_fn closure no longer has a redundant default argument.
+BUG-25 FIX: build_training_pipeline now auto-computes inverse-frequency class
+            weights from the training CSV when CLASS_WEIGHTS is absent from
+            config.  Previously the model always trained without any weighting,
+            causing it to over-predict majority classes.
 BUG-26 FIX: StepLR constants are clearly documented as non-default scheduler
             options, not dead code.
 BUG-28 FIX: Documented that CLASS_WEIGHTS and training hyperparameters must
@@ -30,30 +34,22 @@ from lib.preprocessing.image.transforms import DEFAULT_IMAGE_SIZE, build_image_t
 from lib.preprocessing.text.cleaner import clean_text
 from lib.preprocessing.text.pipeline import build_text_pipeline
 from lib.preprocessing.text.tokenizer import load_tokenizer, tokenize_text
-from lib.utils.config import get_label_maps, load_config
+from lib.utils.class_weights import compute_class_weights_from_csv, log_class_distribution
+from lib.utils.config import get_dataset_paths, get_label_maps, load_config
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Defaults — all of these can be overridden in model_config.json
+# Fallback defaults — all of these are defined in model_config.json.
+# These values are only used if the key is somehow absent from config.
 # ---------------------------------------------------------------------------
 
-# Default batch size for training
-DEFAULT_BATCH_SIZE = 16
-
-# Default number of data loading workers (capped to available CPUs)
-DEFAULT_NUM_WORKERS = min(4, os.cpu_count() or 1)
-
-# Default learning rate for new (randomly initialised) layers
-DEFAULT_LEARNING_RATE = 5e-4
-
-# Default learning rate for the pretrained text encoder
-DEFAULT_ENCODER_LEARNING_RATE = 2e-5
-
-# StepLR scheduler defaults — only used when scheduler_type = "step"
-# (not the default; the default is "cosine")
-DEFAULT_SCHEDULER_STEP_SIZE = 30   # decay every N epochs
-DEFAULT_SCHEDULER_GAMMA = 0.1      # multiply LR by this factor each step
+_FALLBACK_BATCH_SIZE = 32
+_FALLBACK_NUM_WORKERS = min(8, os.cpu_count() or 1)
+_FALLBACK_LEARNING_RATE = 5e-4
+_FALLBACK_ENCODER_LEARNING_RATE = 2e-5
+_FALLBACK_SCHEDULER_STEP_SIZE = 30
+_FALLBACK_SCHEDULER_GAMMA = 0.1
 
 
 def _get_image_size(config: Dict[str, Any]) -> Tuple[int, int]:
@@ -164,8 +160,8 @@ def load_datasets(config: Dict[str, Any]) -> Tuple[CustomDataset, CustomDataset]
 def create_data_loaders(
     train_dataset: Any,
     val_dataset: Any,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    num_workers: int = DEFAULT_NUM_WORKERS,
+    batch_size: int = _FALLBACK_BATCH_SIZE,
+    num_workers: int = _FALLBACK_NUM_WORKERS,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create DataLoaders for training and validation datasets.
@@ -228,8 +224,8 @@ def _build_optimizer(
     Returns:
         Configured AdamW optimizer.
     """
-    lr = cfg.get("learning_rate", DEFAULT_LEARNING_RATE)
-    encoder_lr = cfg.get("encoder_learning_rate", DEFAULT_ENCODER_LEARNING_RATE)
+    lr = cfg.get("learning_rate", _FALLBACK_LEARNING_RATE)
+    encoder_lr = cfg.get("encoder_learning_rate", _FALLBACK_ENCODER_LEARNING_RATE)
     weight_decay = cfg.get("weight_decay", 1e-2)
 
     # Parameters that must NOT have weight decay (standard BERT recipe)
@@ -315,8 +311,8 @@ def setup_training_components(
         logger.info("CosineAnnealingLR: T_max=%d, eta_min=%.2e", t_max, eta_min)
     else:
         # StepLR — set scheduler_type = "step" in config to use this
-        step_size = cfg.get("scheduler_step_size", DEFAULT_SCHEDULER_STEP_SIZE)
-        gamma = cfg.get("scheduler_gamma", DEFAULT_SCHEDULER_GAMMA)
+        step_size = cfg.get("scheduler_step_size", _FALLBACK_SCHEDULER_STEP_SIZE)
+        gamma = cfg.get("scheduler_gamma", _FALLBACK_SCHEDULER_GAMMA)
         base_scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
         logger.info("StepLR: step_size=%d, gamma=%.2f", step_size, gamma)
 
@@ -358,8 +354,8 @@ def setup_training_components(
     logger.info(
         "Training components: lr=%.2e, encoder_lr=%.2e, wd=%.2e, "
         "scheduler=%s, warmup=%d, mixup_alpha=%.2f",
-        cfg.get("learning_rate", DEFAULT_LEARNING_RATE),
-        cfg.get("encoder_learning_rate", DEFAULT_ENCODER_LEARNING_RATE),
+        cfg.get("learning_rate", _FALLBACK_LEARNING_RATE),
+        cfg.get("encoder_learning_rate", _FALLBACK_ENCODER_LEARNING_RATE),
         cfg.get("weight_decay", 1e-2),
         scheduler_type, warmup_epochs, mixup_alpha,
     )
@@ -378,6 +374,13 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
     Loads config, creates datasets and data loaders, initialises the model,
     and sets up training components.
 
+    BUG-25 FIX: If CLASS_WEIGHTS is absent from config, class weights are
+    computed automatically from the training CSV using inverse-frequency
+    weighting.  This prevents the model from over-predicting majority classes
+    on imbalanced datasets.  Set CLASS_WEIGHTS explicitly in config to
+    override the auto-computed values, or set CLASS_WEIGHTS to {} to
+    disable weighting entirely.
+
     Args:
         config_source: Path to a JSON config file, or a pre-loaded config dict.
 
@@ -395,15 +398,47 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
     model_cfg = config.get("model", config)
 
     train_dataset, val_dataset = load_datasets(config)
-    batch_size = config.get("batch_size", DEFAULT_BATCH_SIZE)
-    num_workers = config.get("num_workers", DEFAULT_NUM_WORKERS)
+    batch_size = config.get("batch_size", _FALLBACK_BATCH_SIZE)
+    num_workers = min(
+        config.get("num_workers", _FALLBACK_NUM_WORKERS),
+        os.cpu_count() or 1,
+    )
     train_loader, val_loader = create_data_loaders(
         train_dataset, val_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # BUG-25 FIX: auto-compute class weights from the training CSV when
+    # CLASS_WEIGHTS is not set in config.  The caller can still override by
+    # setting CLASS_WEIGHTS explicitly (including {} to disable).
+    if "CLASS_WEIGHTS" not in config:
+        label_maps = get_label_maps(config)
+        dataset_root = config.get("DATASET_ROOT") or config.get("dataset_root")
+        train_paths = get_dataset_paths("train", dataset_root)
+        train_csv = train_paths["csv"]
+        logger.info(
+            "CLASS_WEIGHTS not set in config — computing from training CSV: %s",
+            train_csv,
+        )
+        log_class_distribution(train_csv, label_maps)
+        auto_weights = compute_class_weights_from_csv(train_csv, label_maps)
+        if auto_weights:
+            config = {**config, "CLASS_WEIGHTS": auto_weights}
+            logger.info(
+                "Auto-computed CLASS_WEIGHTS for %d attribute(s): %s",
+                len(auto_weights),
+                list(auto_weights.keys()),
+            )
+        else:
+            logger.warning(
+                "Could not compute class weights — no matching columns found in CSV. "
+                "Training without class weights (BUG-25 active)."
+            )
+    else:
+        logger.info("Using CLASS_WEIGHTS from config.")
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = create_model(model_cfg, device)
 
     # Pass the full config (not model_cfg) so training hyperparameters

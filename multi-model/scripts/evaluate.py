@@ -26,11 +26,8 @@ from use_cases.training.evaluate import compute_metrics, evaluate_model, save_re
 
 logger = logging.getLogger(__name__)
 
-# Default batch size for evaluation
-DEFAULT_BATCH_SIZE = 32
-
-# Default output directory for results
-DEFAULT_OUTPUT_DIR = "results"
+# Default output directory for results — set via --output CLI flag or config
+_FALLBACK_OUTPUT_DIR = "results"
 
 
 def main() -> None:
@@ -47,10 +44,10 @@ def main() -> None:
                         help="Path to the model checkpoint")
     parser.add_argument("--split",      type=str, default="test",
                         help="Dataset split to evaluate on (default: test)")
-    parser.add_argument("--output",     type=str, default=DEFAULT_OUTPUT_DIR,
+    parser.add_argument("--output",     type=str, default=_FALLBACK_OUTPUT_DIR,
                         help="Output directory for results")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
-                        help="Batch size for evaluation")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="Batch size for evaluation (overrides config batch_size)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -101,7 +98,11 @@ def main() -> None:
         text_pipeline=text_pipeline,
         dataset_root=dataset_root,
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size if args.batch_size is not None else config.get("batch_size", 32),
+        shuffle=False,
+    )
 
     # BUG-05 FIX: pass text_max_length so evaluate_model uses the right seq_len
     text_max_length = config.get("text_max_length", 256)

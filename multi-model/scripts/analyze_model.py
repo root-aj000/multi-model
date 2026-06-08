@@ -2,7 +2,9 @@
 Model analysis utility script.
 
 Analyzes the FG_MFN model architecture, counting trainable parameters
-and estimating inference latency.
+and estimating inference latency. Benchmark parameters (num_samples,
+batch size, seq length) are read from model_config.json (analyze section)
+and can be overridden via CLI flags.
 """
 
 import argparse
@@ -17,19 +19,8 @@ from lib.models.fg_mfn import FG_MFN
 
 logger = logging.getLogger(__name__)
 
-# Default number of sample inputs for latency benchmarking
-DEFAULT_NUM_SAMPLES = 100
-
-# Default batch size for benchmarking
-DEFAULT_BATCH_SIZE = 1
-
-# Default image input dimensions
-DEFAULT_IMAGE_CHANNELS = 3
-DEFAULT_IMAGE_HEIGHT = 224
-DEFAULT_IMAGE_WIDTH = 224
-
-# Default text sequence length
-DEFAULT_SEQ_LENGTH = 128
+# Fixed physical constant — not user-configurable
+_IMAGE_CHANNELS = 3
 
 
 def count_parameters(model: torch.nn.Module) -> int:
@@ -60,11 +51,11 @@ def count_total_parameters(model: torch.nn.Module) -> int:
 
 def benchmark_inference(
     model: torch.nn.Module,
-    num_samples: int = DEFAULT_NUM_SAMPLES,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    image_height: int = DEFAULT_IMAGE_HEIGHT,
-    image_width: int = DEFAULT_IMAGE_WIDTH,
-    seq_length: int = DEFAULT_SEQ_LENGTH,
+    num_samples: int = 100,
+    batch_size: int = 1,
+    image_height: int = 224,
+    image_width: int = 224,
+    seq_length: int = 128,
 ) -> Dict[str, float]:
     """
     Benchmark inference latency on random inputs.
@@ -84,7 +75,7 @@ def benchmark_inference(
     device = next(model.parameters()).device
 
     dummy_images = torch.randn(
-        batch_size, DEFAULT_IMAGE_CHANNELS,
+        batch_size, _IMAGE_CHANNELS,
         image_height, image_width,
     ).to(device)
     dummy_input_ids = torch.randint(
@@ -113,16 +104,18 @@ def benchmark_inference(
 
 def analyze_model(
     cfg: Dict[str, Any],
-    num_samples: int = DEFAULT_NUM_SAMPLES,
+    num_samples: int = 100,
 ) -> Dict[str, Any]:
     """
     Analyze the model suitability for production.
 
     Creates the model from configuration, counts parameters, and
-    optionally benchmarks inference latency.
+    optionally benchmarks inference latency. Image size and sequence
+    length for benchmarking are read from cfg (image_size and
+    analyze.benchmark_seq_length) when available.
 
     Args:
-        cfg: Model configuration dictionary.
+        cfg: Model configuration dictionary (full config, not just model keys).
         num_samples: Number of sample inputs for latency analysis.
 
     Returns:
@@ -142,7 +135,23 @@ def analyze_model(
     }
 
     if num_samples > 0:
-        latency_results = benchmark_inference(model, num_samples)
+        analyze_cfg = cfg.get("analyze", {})
+        raw_size = cfg.get("image_size", [224, 224])
+        if isinstance(raw_size, (list, tuple)) and len(raw_size) == 2:
+            img_w, img_h = int(raw_size[0]), int(raw_size[1])
+        elif isinstance(raw_size, int):
+            img_w = img_h = raw_size
+        else:
+            img_w = img_h = 224
+
+        latency_results = benchmark_inference(
+            model,
+            num_samples=num_samples,
+            batch_size=analyze_cfg.get("benchmark_batch_size", 1),
+            image_height=img_h,
+            image_width=img_w,
+            seq_length=analyze_cfg.get("benchmark_seq_length", 128),
+        )
         result.update(latency_results)
 
     return result
@@ -153,6 +162,7 @@ def main() -> None:
     Parse arguments and run model analysis.
 
     Loads the model configuration, runs analysis, and prints results.
+    Benchmark parameters default to values in config (analyze section).
     """
     parser = argparse.ArgumentParser(
         description="Analyze model parameters and size",
@@ -166,15 +176,22 @@ def main() -> None:
     parser.add_argument(
         "--num_samples",
         type=int,
-        default=DEFAULT_NUM_SAMPLES,
-        help="Number of sample inputs for latency benchmarking",
+        default=None,
+        help="Number of sample inputs for latency benchmarking (overrides config analyze.num_samples)",
     )
     args = parser.parse_args()
 
     with open(args.config) as file_handle:
         cfg = json.load(file_handle)
 
-    result = analyze_model(cfg, args.num_samples)
+    analyze_cfg = cfg.get("analyze", {})
+    num_samples = (
+        args.num_samples
+        if args.num_samples is not None
+        else analyze_cfg.get("num_samples", 100)
+    )
+
+    result = analyze_model(cfg, num_samples)
 
     for key, value in result.items():
         print(f"  {key}: {value}")

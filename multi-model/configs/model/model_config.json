@@ -22,12 +22,12 @@
   "_comment_TEXT_POOLING": [
     "How to pool transformer token representations into a single vector.",
     "",
-    "  attention_weighted  ← RECOMMENDED",
+    "  attention_weighted  (RECOMMENDED)",
     "      Weight each token by its average self-attention score from the",
     "      encoder's final layer, then take a weighted sum.",
     "      Tokens the model already focuses on (keywords, prices, brand names)",
     "      contribute more. Padding tokens get near-zero weight automatically.",
-    "      No extra parameters — uses the encoder's own learned attention.",
+    "      No extra parameters - uses the encoder's own learned attention.",
     "      Estimated gain over mean: +1-3% accuracy.",
     "",
     "  mean",
@@ -45,21 +45,21 @@
   "FUSION_TYPE": "attention",
   "_comment_FUSION_TYPE": [
     "How to fuse visual and text features. Options:",
-    "  attention : RECOMMENDED — full bidirectional cross-modal MHA.",
+    "  attention : RECOMMENDED - full bidirectional cross-modal MHA.",
     "              Visual attends to text AND text attends to visual.",
     "              Both modalities keep their native dimensions until fusion.",
     "              Adds CrossModalAttention module (see fg_mfn.py).",
-    "  concat    : concatenate native vectors → Linear(v_dim+t_dim, HIDDEN_DIM).",
+    "  concat    : concatenate native vectors -> Linear(v_dim+t_dim, HIDDEN_DIM).",
     "              Simple and fast, no attention parameters.",
-    "  add       : element-wise sum → Linear(dim, HIDDEN_DIM).",
+    "  add       : element-wise sum -> Linear(dim, HIDDEN_DIM).",
     "              Only valid when visual_dim == text_dim (rare).",
-    "Change this key only — no code changes needed."
+    "Change this key only - no code changes needed."
   ],
 
   "HIDDEN_DIM": 512,
   "_comment_HIDDEN_DIM": [
     "Output dimension of the shared FC and all classification heads.",
-    "This is NOT the dimension of the visual or text encoders — those",
+    "This is NOT the dimension of the visual or text encoders - those",
     "keep their native dimensions (e.g. 2048 for ResNet-50, 768 for BERT).",
     "The projection to HIDDEN_DIM happens AFTER cross-modal attention,",
     "so no information is discarded before the modalities interact."
@@ -74,12 +74,9 @@
     "Must be divisible by ATTENTION_HEADS.",
     "",
     "Issue 11 fix: changed from 512 to 768.",
-    "  512 caused a 50% compression of the text branch (768→512) before",
-    "  attention, discarding information unnecessarily.",
     "  768 = native DistilBERT/BERT dimension, so text is not compressed at all.",
-    "  Visual (2048→768) is still compressed but that is unavoidable.",
-    "  After attention: [v_out(768); t_out(768)] → Linear(1536, HIDDEN_DIM=512).",
-    "  This is a single well-conditioned projection, not a bottleneck.",
+    "  Visual (2048->768) is still compressed but unavoidable.",
+    "  After attention: [v_out(768); t_out(768)] -> Linear(1536, HIDDEN_DIM=512).",
     "",
     "If you switch to bert-large (native_dim=1024), set ATTENTION_DIM=1024.",
     "Rule of thumb: ATTENTION_DIM >= text encoder native_dim."
@@ -91,7 +88,6 @@
     "Only used when FUSION_TYPE = 'attention'.",
     "Must divide ATTENTION_DIM evenly: ATTENTION_DIM % ATTENTION_HEADS == 0.",
     "Each head operates on ATTENTION_DIM / ATTENTION_HEADS = 64 dims.",
-    "More heads = finer-grained cross-modal alignment.",
     "Typical values: 4, 8 (default), 16."
   ],
 
@@ -108,13 +104,13 @@
   "DEEP_SHARED_LAYER": true,
   "_comment_DEEP_SHARED_LAYER": [
     "If true, use a two-layer shared FC after fusion:",
-    "  fusion_dim → HIDDEN_DIM → HIDDEN_DIM",
-    "If false, use a single layer: fusion_dim → HIDDEN_DIM"
+    "  fusion_dim -> HIDDEN_DIM -> HIDDEN_DIM",
+    "If false, use a single layer: fusion_dim -> HIDDEN_DIM"
   ],
 
   "_comment_image": "=== IMAGE PREPROCESSING ===",
 
-  "image_size": [224 , 224],
+  "image_size": [224, 224],
   "_comment_image_size": [
     "Input image size as [width, height]. Must match what the backbone expects.",
     "Recommended sizes by backbone:",
@@ -123,7 +119,8 @@
     "  efficientnet_b3  : [300,300]",
     "  efficientnet_b7  : [600,600]",
     "  convnext_*       : [224,224] or [384,384]",
-    "BUG-09 FIX: image/pipeline.py now uses this value (not a hardcoded 224)."
+    "BUG-09 FIX: image/pipeline.py now uses this value (not a hardcoded 224).",
+    "Used by: transforms.py, pipeline.py, evaluate.py, predict_image.py, analyze_model.py"
   ],
 
   "_comment_text": "=== TEXT PREPROCESSING ===",
@@ -135,7 +132,8 @@
   "_comment_text_max_length": [
     "Maximum token sequence length for the text encoder.",
     "Must be consistent across training, validation, and inference.",
-    "BUG-05/10 FIX: all code now reads this value from config (was hardcoded 128 in some places)."
+    "BUG-05/10 FIX: all code now reads this value from config.",
+    "Used by: pipeline.py, train_model.py script, evaluate.py, predict_image.py, tokenizer.py"
   ],
 
   "DATASET_ROOT": "/kaggle/input/datasets/anishjagdaleaj/ads-dataset-with-images-2025-2026/dataset",
@@ -162,7 +160,7 @@
     "Should be ~10-25x lower than learning_rate to avoid catastrophic forgetting."
   ],
 
-  "weight_decay": 0.01,
+  "weight_decay": 1e-3,
   "_comment_weight_decay": [
     "L2 regularisation applied to non-bias, non-LayerNorm parameters.",
     "Bias and LayerNorm weights always have weight_decay=0 (standard BERT recipe).",
@@ -172,8 +170,18 @@
   "batch_size": 32,
   "_comment_batch_size": [
     "Training and validation batch size.",
+    "With DataParallel (multi-GPU) each GPU processes batch_size/num_gpus samples.",
+    "Consider doubling when using 2 GPUs to keep per-GPU workload constant.",
     "BUG-07 FIX: train DataLoader uses drop_last=True so the last batch",
     "is never smaller than batch_size (prevents BatchNorm crash on batch=1)."
+  ],
+
+  "num_workers": 8,
+  "_comment_num_workers": [
+    "Number of DataLoader worker processes for data loading.",
+    "Higher values help keep multiple GPUs fed with data.",
+    "Set to 0 to load data in the main process (useful for debugging).",
+    "Capped to available CPU count at runtime."
   ],
 
   "epochs": 100,
@@ -184,16 +192,36 @@
     "Number of linear LR warmup epochs at the start of training.",
     "LR ramps from near-zero to learning_rate over this many epochs.",
     "Set to 0 to disable warmup.",
-    "BUG-01 FIX: warmup is handled by SequentialLR+LinearLR in pipeline.py.",
-    "The old apply_warmup() function has been removed."
+    "BUG-01 FIX: warmup is handled by SequentialLR+LinearLR in pipeline.py."
   ],
 
   "mixup_alpha": 0.2,
   "_comment_mixup_alpha": [
     "Mixup Beta distribution parameter. 0 disables Mixup.",
-    "Typical values: 0.1–0.4. Higher = more aggressive mixing.",
+    "Typical values: 0.1-0.4. Higher = more aggressive mixing.",
     "BUG-04 FIX: training accuracy is now computed against labels_a",
     "(the dominant label) rather than the blended label dict."
+  ],
+
+  "early_stopping_patience": 5,
+  "_comment_early_stopping_patience": [
+    "Stop training if val accuracy does not improve for this many consecutive epochs.",
+    "Set to 0 to disable early stopping.",
+    "Used by: train_model.py script"
+  ],
+
+  "checkpoint_dir": "saved_models",
+  "_comment_checkpoint_dir": [
+    "Directory to save model checkpoints during training.",
+    "Best checkpoints are saved as best_model_epoch_N_acc_X.pt.",
+    "Last epoch checkpoint is saved as last_model.pt.",
+    "Used by: train_model.py script"
+  ],
+
+  "log_dir": "local/logs",
+  "_comment_log_dir": [
+    "Directory to store training logs (CSV of per-epoch metrics).",
+    "Used by: train_model.py script"
   ],
 
   "_comment_scheduler": "=== LEARNING RATE SCHEDULER ===",
@@ -202,7 +230,7 @@
   "_comment_scheduler_type": [
     "LR decay schedule after warmup. Options:",
     "  cosine : CosineAnnealingLR from warmup_end to epoch N (recommended)",
-    "  step   : StepLR — multiply LR by scheduler_gamma every scheduler_step_size epochs"
+    "  step   : StepLR - multiply LR by scheduler_gamma every scheduler_step_size epochs"
   ],
 
   "scheduler_eta_min": 1e-6,
@@ -214,18 +242,60 @@
   "scheduler_gamma": 0.1,
   "_comment_scheduler_gamma": "LR multiplier per step. Only used when scheduler_type = 'step'.",
 
-  "_comment_class_weights": "=== CLASS WEIGHTS (optional) ===",
+  "_comment_class_weights": "=== CLASS WEIGHTS ===",
   "_comment_class_weights_note": [
     "Per-attribute class weights for CrossEntropyLoss.",
-    "Use when your dataset is class-imbalanced (very common for multi-class attributes).",
-    "Compute from training CSV: weight[i] = total_samples / (num_classes * count[i])",
-    "BUG-25 NOTE: Without class weights the model will over-predict majority classes.",
-    "Example (uncomment and fill in real values):",
+    "BUG-25 FIX: If this key is absent, weights are auto-computed from the",
+    "training CSV using inverse-frequency: weight[i] = total / (num_classes * count[i]).",
+    "Set to {} to explicitly disable weighting.",
+    "Set to a dict of lists to use fixed weights (overrides auto-computation).",
+    "Example:",
     "  'CLASS_WEIGHTS': {",
-    "    'theme': [1.2, 0.8, 1.5, 0.9, 1.1, 0.7, 1.3, 0.6, 1.4],",
-    "    'sentiment': [1.0, 0.9, 1.1]",
+    "    'sentiment': [1.19, 1.04, 0.83],",
+    "    'emotion': [0.83, 1.25, 1.67, 0.83, 0.83]",
     "  }"
   ],
+
+  "_comment_ocr": "=== OCR ENGINE ===",
+
+  "ocr": {
+    "engine": "easyocr",
+    "_comment_engine": "OCR backend to use. Options: easyocr, paddleocr",
+
+    "language": "en",
+    "_comment_language": [
+      "Language code for OCR text recognition.",
+      "EasyOCR: uses ISO 639-1 codes, e.g. 'en', 'ch_sim', 'fr'.",
+      "PaddleOCR: uses language names, e.g. 'en', 'ch', 'french'.",
+      "Used by: lib/ocr/paddleocr.py, lib/ocr/easyocr.py"
+    ],
+
+    "model_dir": "local/ocr",
+    "_comment_model_dir": "Directory to cache downloaded OCR model files."
+  },
+
+  "_comment_server": "=== PREDICTION SERVER ===",
+
+  "server": {
+    "host": "0.0.0.0",
+    "_comment_host": "Host address to bind the prediction server.",
+
+    "port": 8000,
+    "_comment_port": "Port for the prediction server."
+  },
+
+  "_comment_analyze": "=== MODEL ANALYSIS / BENCHMARKING ===",
+
+  "analyze": {
+    "num_samples": 100,
+    "_comment_num_samples": "Number of forward passes for latency benchmarking in analyze_model.py.",
+
+    "benchmark_batch_size": 1,
+    "_comment_benchmark_batch_size": "Batch size used for latency benchmarking.",
+
+    "benchmark_seq_length": 128,
+    "_comment_benchmark_seq_length": "Text sequence length used for latency benchmarking dummy inputs."
+  },
 
   "_comment_augmentation": "=== DATA AUGMENTATION ===",
 
@@ -251,7 +321,6 @@
       "hue": 0.02,
       "_comment_hue": [
         "Hue rotation as a fraction of the full circle [0, 0.5].",
-        "0.05 = ±18° rotation. Applied with probability 0.3.",
         "BUG-13 FIX: now performs a real HSV hue rotation (not additive RGB shift)."
       ]
     },
@@ -304,5 +373,3 @@
     }
   }
 }
-
-

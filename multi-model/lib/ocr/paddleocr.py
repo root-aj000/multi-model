@@ -2,7 +2,8 @@
 PaddleOCR engine implementation.
 
 Provides an OCR engine backed by the PaddleOCR library for extracting
-text from images with confidence scores.
+text from images with confidence scores. The OCR language is read from
+model_config.json (ocr.language) rather than hardcoded.
 """
 
 import logging
@@ -14,9 +15,6 @@ from lib.ocr.engine import OCREngine
 
 logger = logging.getLogger(__name__)
 
-# Default language for PaddleOCR
-DEFAULT_LANGUAGE = "en"
-
 
 class PaddleOCREngine(OCREngine):
     """
@@ -26,17 +24,20 @@ class PaddleOCREngine(OCREngine):
     average confidence scores across all detected text regions.
     """
 
-    def __init__(self, model_dir: Path) -> None:
+    def __init__(self, model_dir: Path, language: str = "en") -> None:
         """
         Initialize the PaddleOCR engine.
 
         Args:
             model_dir: Directory to store PaddleOCR model files.
+            language:  Language code for OCR recognition.
+                       Read from config (ocr.language); defaults to 'en'.
 
         Raises:
             ImportError: If the paddleocr package is not installed.
         """
         self.model_dir = Path(model_dir)
+        self.language = language
         self.ocr = None
         self._init_engine()
 
@@ -51,7 +52,7 @@ class PaddleOCREngine(OCREngine):
             from paddleocr import PaddleOCR
             self.ocr = PaddleOCR(
                 use_angle_cls=True,
-                lang=DEFAULT_LANGUAGE,
+                lang=self.language,
                 det_model_dir=str(self.model_dir),
             )
             logger.info("PaddleOCR engine initialized successfully")

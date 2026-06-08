@@ -49,24 +49,39 @@ def load_tokenizer(encoder_name: str) -> Any:
     return load_model_tokenizer(encoder_name)
 
 
-def create_model(cfg: Dict[str, Any], device: torch.device) -> FG_MFN:
+def create_model(cfg: Dict[str, Any], device: torch.device) -> torch.nn.Module:
     """
     Create a fresh FG_MFN model from a configuration dictionary.
 
     The model is placed on `device` and set to train() mode.
+    If multiple CUDA GPUs are available, the model is wrapped with
+    nn.DataParallel so all GPUs are used automatically.  Callers that
+    need to access FG_MFN-specific attributes (e.g. for checkpoint saving)
+    should access model.module when DataParallel is active.
+
     Use load_model() when loading for inference — it sets eval() mode.
 
     Args:
         cfg:    Model configuration dict (IMAGE_BACKBONE, TEXT_ENCODER, …).
-        device: Target device.
+        device: Target device (should be torch.device("cuda") or "cuda:0").
 
     Returns:
-        FG_MFN model in train() mode on `device`.
+        FG_MFN (or DataParallel-wrapped FG_MFN) in train() mode on `device`.
     """
     model = FG_MFN(cfg)
     model = model.to(device)
+
+    num_gpus = torch.cuda.device_count()
+    if device.type == "cuda" and num_gpus > 1:
+        logger.info(
+            "DataParallel: spreading model across %d GPUs: %s",
+            num_gpus,
+            [torch.cuda.get_device_name(i) for i in range(num_gpus)],
+        )
+        model = torch.nn.DataParallel(model)
+
     model.train()
-    logger.info("Created fresh FG_MFN model on %s", device)
+    logger.info("Created fresh FG_MFN model on %s (num_gpus=%d)", device, max(num_gpus, 1))
     return model
 
 
