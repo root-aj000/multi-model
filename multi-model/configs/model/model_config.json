@@ -10,7 +10,7 @@
     "Changing this requires retraining from scratch."
   ],
 
-  "TEXT_ENCODER": "bert-base-uncased",
+  "TEXT_ENCODER": "distilbert-base-uncased",
   "_comment_TEXT_ENCODER": [
     "HuggingFace transformer encoder. Options:",
     "  distilbert-base-uncased  (faster, slightly lower accuracy)",
