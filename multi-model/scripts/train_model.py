@@ -16,6 +16,7 @@ import torch
 
 from lib.utils.config import load_config
 from lib.utils.logging import TrainingLogger
+from lib.utils.metrics_viz import generate_all_training_visualizations
 from use_cases.training.pipeline import build_training_pipeline
 from use_cases.training.train_model import train_epoch, validate_epoch
 
@@ -206,6 +207,20 @@ def main() -> None:
 
     training_logger.close()
     print(f"Training complete. Best validation accuracy: {best_val_accuracy:.4f}")
+
+    # Generate training visualizations
+    print("\n" + "="*60)
+    print("Generating training visualizations...")
+    print("="*60)
+    training_log_path = Path(args.log_dir) / "training_log.csv"
+    viz_results = generate_all_training_visualizations(
+        str(training_log_path),
+        args.log_dir
+    )
+    for viz_name, success in viz_results.items():
+        status = "✓ Generated" if success else "✗ Failed/Skipped"
+        print(f"  {status}: {viz_name}")
+    print("="*60)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ BUG-21 FIX: Uses lib.preprocessing.text.tokenizer.load_tokenizer exclusively
 """
 
 import argparse
+import json
 import logging
 
 import torch
@@ -20,6 +21,7 @@ from lib.preprocessing.text.cleaner import clean_text
 from lib.preprocessing.text.pipeline import build_text_pipeline
 from lib.preprocessing.text.tokenizer import load_tokenizer, tokenize_text
 from lib.utils.config import get_label_maps, load_config
+from lib.utils.metrics_viz import generate_all_evaluation_visualizations
 from use_cases.training.evaluate import compute_metrics, evaluate_model, save_results
 
 logger = logging.getLogger(__name__)
@@ -111,16 +113,32 @@ def main() -> None:
         evaluation_results["all_labels"],
         per_attr_preds=evaluation_results.get("per_attr_preds"),
         per_attr_labels=evaluation_results.get("per_attr_labels"),
+        label_maps=label_maps,
     )
     save_results(metrics, args.output)
 
     print(f"\nEvaluation complete on '{args.split}' split.")
-    print(f"Macro-average accuracy: {metrics['accuracy']:.4f}")
+    print(f"Macro-average accuracy: {metrics['accuracy_macro']:.4f}")
+    print(f"Weighted-average accuracy: {metrics['accuracy_weighted']:.4f}")
     if "per_attribute" in metrics:
         print("\nPer-attribute accuracies:")
-        for attr, acc in metrics["per_attribute"].items():
-            print(f"  {attr:20s}: {acc:.4f}")
+        for attr, res in metrics["per_attribute"].items():
+            acc = res.get("accuracy", 0)
+            f1 = res.get("f1_weighted", "N/A")
+            print(f"  {attr:20s}: accuracy={acc:.4f}, f1_weighted={f1}")
     print(f"\nResults saved to {args.output}")
+
+    # Generate evaluation visualizations
+    print("\n" + "="*60)
+    print("Generating evaluation visualizations...")
+    print("="*60)
+    viz_results = generate_all_evaluation_visualizations(
+        metrics, args.output, label_maps=label_maps
+    )
+    for viz_name, success in viz_results.items():
+        status = "✓ Generated" if success else "✗ Failed/Skipped"
+        print(f"  {status}: {viz_name}")
+    print("="*60)
 
 
 if __name__ == "__main__":

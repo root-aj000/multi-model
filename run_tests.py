@@ -3,7 +3,7 @@ import sys
 
 def run_all_tests():
     loader = unittest.TestLoader()
-    start_dir = 'tests'
+    start_dir = 'multi-model/tests'
     suite = loader.discover(start_dir)
 
     runner = unittest.TextTestRunner(verbosity=2)
