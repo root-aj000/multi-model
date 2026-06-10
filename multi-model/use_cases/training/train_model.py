@@ -13,7 +13,7 @@ BUG-06 FIX: _compute_accuracy now returns (correct_count, total_count) so
 
 import logging
 from typing import Any, Dict, Tuple
-
+from typing import Optional
 import torch
 from torch.utils.data import DataLoader
 
