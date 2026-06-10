@@ -108,6 +108,26 @@
     "If false, use a single layer: fusion_dim -> HIDDEN_DIM"
   ],
 
+  "ATTRIBUTE_LOSS_WEIGHTS": {
+    "theme": 1.0,
+    "sentiment": 1.5,
+    "emotion": 1.5,
+    "dominant_colour": 1.0,
+    "attention_score": 0.3,
+    "trust_safety": 1.5,
+    "target_audience": 1.2,
+    "predicted_ctr": 0.3,
+    "likelihood_shares": 0.3
+  },
+  "_comment_ATTRIBUTE_LOSS_WEIGHTS": [
+    "Per-attribute multiplier applied to each head's CrossEntropyLoss before summing.",
+    "Attributes whose labels cannot be reliably predicted from image+text alone",
+    "(attention_score, predicted_ctr, likelihood_shares) are downweighted so their",
+    "noisy gradients don't corrupt the shared representation.",
+    "Semantic attributes (sentiment, emotion, trust_safety) are upweighted slightly.",
+    "Used by train_epoch in train_model.py — see ATTRIBUTE_LOSS_WEIGHTS key."
+  ],
+
   "_comment_image": "=== IMAGE PREPROCESSING ===",
 
   "image_size": [224, 224],
@@ -136,7 +156,7 @@
     "Used by: pipeline.py, train_model.py script, evaluate.py, predict_image.py, tokenizer.py"
   ],
 
-  "DATASET_ROOT": "/kaggle/input/datasets/anishjagdaleaj/ads-dataset-with-images-2025-2026-v1/dataset",
+  "DATASET_ROOT": "/kaggle/input/datasets/anishjagdaleaj/ads-dataset-with-images-2025-2026-v1/",
   "_comment_DATASET_ROOT": [
     "Optional path to the dataset root for training and evaluation.",
     "If set, the code resolves splits from this directory instead of",
@@ -151,13 +171,14 @@
     "BUG-28 NOTE: setup_training_components reads from the top-level config."
   ],
 
-  "learning_rate": 1e-4,
-  "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC).",
+  "learning_rate": 3e-4,
+  "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC). Raised from 1e-4 → 3e-4.",
 
-  "encoder_learning_rate": 5e-6,
+  "encoder_learning_rate": 2e-5,
   "_comment_encoder_learning_rate": [
     "LR for the pretrained text encoder (text_module.encoder).",
-    "Should be ~10-25x lower than learning_rate to avoid catastrophic forgetting."
+    "Should be ~10-25x lower than learning_rate to avoid catastrophic forgetting.",
+    "Raised from 5e-6 → 2e-5: the encoder was barely fine-tuning at 5e-6."
   ],
 
   "weight_decay": 1e-3,
@@ -195,12 +216,12 @@
     "BUG-01 FIX: warmup is handled by SequentialLR+LinearLR in pipeline.py."
   ],
 
-  "mixup_alpha": 0.3,
+  "mixup_alpha": 0.0,
   "_comment_mixup_alpha": [
     "Mixup Beta distribution parameter. 0 disables Mixup.",
-    "Typical values: 0.1-0.4. Higher = more aggressive mixing.",
-    "BUG-04 FIX: training accuracy is now computed against labels_a",
-    "(the dominant label) rather than the blended label dict."
+    "Set to 0: multi-task training with 9 conflicting label sets makes Mixup harmful.",
+    "A mixed image of 'Food' and 'Tech' ads has no valid joint labels.",
+    "Standard image augmentation (already configured) is sufficient."
   ],
 
   "early_stopping_patience": 15,

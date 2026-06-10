@@ -168,6 +168,7 @@ def train_epoch(
     device: torch.device,
     mixup_alpha: float = DEFAULT_MIXUP_ALPHA,
     text_max_length: int = 256,
+    attribute_loss_weights: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, float]:
     """
     Run one training epoch.
@@ -181,6 +182,11 @@ def train_epoch(
         mixup_alpha:     Mixup alpha. 0 disables Mixup.
         text_max_length: Fallback sequence length when batch has no text.
                          Must match text_max_length in config.
+        attribute_loss_weights: Optional dict mapping attribute name to a
+                         scalar multiplier applied to that head's loss before
+                         summing. Downweight noisy heads (predicted_ctr,
+                         likelihood_shares, attention_score) to prevent their
+                         gradients from corrupting the shared representation.
 
     Returns:
         (average_loss, accuracy) for the epoch.
@@ -220,6 +226,7 @@ def train_epoch(
 
         if isinstance(outputs, dict) and isinstance(labels_a, dict):
             loss = sum(
+                (attribute_loss_weights or {}).get(attr, 1.0) *
                 mixup_criterion(
                     _get_criterion(criterion, attr),
                     outputs[attr],
@@ -231,6 +238,7 @@ def train_epoch(
             )
         elif isinstance(outputs, dict):
             loss = sum(
+                (attribute_loss_weights or {}).get(attr, 1.0) *
                 mixup_criterion(
                     _get_criterion(criterion, attr),
                     logits, labels_a, labels_b, lam,
@@ -243,6 +251,7 @@ def train_epoch(
             )
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         running_loss  += loss.item() * batch_size

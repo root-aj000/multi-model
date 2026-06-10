@@ -147,6 +147,7 @@ def main() -> None:
     # text_max_length must match the value in config so fallback tensors
     # in train_epoch/validate_epoch have the correct sequence length.
     text_max_length = config.get("text_max_length", 256)
+    attribute_loss_weights = pipeline.get("attribute_loss_weights", {})
     early_stopping_patience = (
         args.early_stopping_patience
         if args.early_stopping_patience is not None
@@ -160,6 +161,7 @@ def main() -> None:
             model, train_loader, criterion, optimizer, device,
             mixup_alpha=mixup_alpha,
             text_max_length=text_max_length,
+            attribute_loss_weights=attribute_loss_weights,
         )
         val_loss, val_accuracy = validate_epoch(
             model, val_loader, criterion, device,

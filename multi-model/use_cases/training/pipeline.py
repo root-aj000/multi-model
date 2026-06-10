@@ -458,4 +458,5 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
         "train_loader": train_loader,
         "val_loader": val_loader,
         **components,
+        "attribute_loss_weights": config.get("ATTRIBUTE_LOSS_WEIGHTS", {}),
     }

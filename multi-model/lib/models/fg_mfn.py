@@ -368,9 +368,19 @@ class FG_MFN(nn.Module):
             if not isinstance(num_classes, int) or num_classes <= 0:
                 logger.warning("Skipping '%s': invalid num_classes=%s", attr_name, num_classes)
                 continue
-            self.attribute_heads[attr_name] = nn.Linear(hidden_dim, num_classes)
+            # Task-specific two-layer head: each attribute gets its own private
+            # MLP so gradient conflicts between heads are minimised.
+            # The shared_fc output (hidden_dim) is projected per-attribute
+            # before the final classification layer.
+            head_hidden = max(hidden_dim // 2, num_classes * 4)
+            self.attribute_heads[attr_name] = nn.Sequential(
+                nn.Linear(hidden_dim, head_hidden),
+                nn.GELU(),
+                nn.Dropout(0.15),
+                nn.Linear(head_hidden, num_classes),
+            )
             created += 1
-            logger.info("Head '%s': %d classes", attr_name, num_classes)
+            logger.info("Head '%s': %d → %d → %d classes", attr_name, hidden_dim, head_hidden, num_classes)
         if created == 0:
             raise ValueError("No attribute heads created. Check ATTRIBUTES in config.")
 
