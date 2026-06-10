@@ -91,8 +91,8 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
-  "DROPOUT": 0.3,
-  "_comment_DROPOUT": "Dropout probability in [0, 1). Applied in shared FC layers.",
+  "DROPOUT": 0.4,
+  "_comment_DROPOUT": "Dropout probability in [0, 1). Raised from 0.3 → 0.4 to combat overfitting (train/val gap visible by epoch 11 with 4860 training samples).",
 
   "FREEZE_BACKBONE": false,
   "_comment_FREEZE_BACKBONE": [
@@ -113,18 +113,18 @@
     "sentiment": 1.5,
     "emotion": 1.5,
     "dominant_colour": 1.0,
-    "attention_score": 0.3,
+    "attention_score": 0.1,
     "trust_safety": 1.5,
     "target_audience": 1.2,
-    "predicted_ctr": 0.3,
-    "likelihood_shares": 0.3
+    "predicted_ctr": 0.1,
+    "likelihood_shares": 0.1
   },
   "_comment_ATTRIBUTE_LOSS_WEIGHTS": [
     "Per-attribute multiplier applied to each head's CrossEntropyLoss before summing.",
-    "Attributes whose labels cannot be reliably predicted from image+text alone",
-    "(attention_score, predicted_ctr, likelihood_shares) are downweighted so their",
-    "noisy gradients don't corrupt the shared representation.",
-    "Semantic attributes (sentiment, emotion, trust_safety) are upweighted slightly.",
+    "attention_score/predicted_ctr/likelihood_shares are engagement metrics that cannot",
+    "be learned from image+text content (confirmed by Cramér's V ≈ 0.02–0.04).",
+    "Reducing them to 0.1 (from 0.3) almost silences their gradient noise,",
+    "letting the semantic heads (sentiment, emotion, trust_safety) dominate.",
     "Used by train_epoch in train_model.py — see ATTRIBUTE_LOSS_WEIGHTS key."
   ],
 
@@ -181,18 +181,20 @@
     "Raised from 5e-6 → 2e-5: the encoder was barely fine-tuning at 5e-6."
   ],
 
-  "weight_decay": 1e-3,
+  "weight_decay": 5e-3,
   "_comment_weight_decay": [
     "L2 regularisation applied to non-bias, non-LayerNorm parameters.",
+    "Raised from 1e-3 → 5e-3 to combat overfitting on small dataset (4860 samples).",
     "Bias and LayerNorm weights always have weight_decay=0 (standard BERT recipe).",
     "BUG-02 FIX: no longer passed as a global AdamW arg (was redundant)."
   ],
 
-  "batch_size": 32,
+  "batch_size": 64,
   "_comment_batch_size": [
     "Training and validation batch size.",
     "With DataParallel (multi-GPU) each GPU processes batch_size/num_gpus samples.",
-    "Consider doubling when using 2 GPUs to keep per-GPU workload constant.",
+    "Doubled from 32 → 64 to use both T4 GPUs effectively (32 samples/GPU).",
+    "Larger batches also stabilise gradient estimates with only 4860 training samples.",
     "BUG-07 FIX: train DataLoader uses drop_last=True so the last batch",
     "is never smaller than batch_size (prevents BatchNorm crash on batch=1)."
   ],
@@ -208,10 +210,13 @@
   "epochs": 100,
   "_comment_epochs": "Total number of training epochs.",
 
-  "warmup_epochs": 15,
+  "warmup_epochs": 5,
   "_comment_warmup_epochs": [
     "Number of linear LR warmup epochs at the start of training.",
     "LR ramps from near-zero to learning_rate over this many epochs.",
+    "Reduced from 15 → 5: with only 4860 samples, 15 warmup epochs means the",
+    "LR didn't peak until epoch 15, at which point val loss was already rising.",
+    "5 epochs gives stable early gradients without delaying convergence.",
     "Set to 0 to disable warmup.",
     "BUG-01 FIX: warmup is handled by SequentialLR+LinearLR in pipeline.py."
   ],
@@ -224,9 +229,20 @@
     "Standard image augmentation (already configured) is sufficient."
   ],
 
-  "early_stopping_patience": 15,
+  "label_smoothing": 0.1,
+  "_comment_label_smoothing": [
+    "CrossEntropyLoss label smoothing epsilon. 0.0 disables.",
+    "Redistributes 10% of the probability mass uniformly across all classes,",
+    "preventing overconfident predictions on small datasets.",
+    "Particularly helpful when val loss diverges from train loss (as seen at epoch 11).",
+    "Typical values: 0.05–0.15. Higher = stronger regularisation."
+  ],
+
+  "early_stopping_patience": 10,
   "_comment_early_stopping_patience": [
     "Stop training if val accuracy does not improve for this many consecutive epochs.",
+    "Reduced from 15 → 10: with the train/val gap already opening at epoch 11,",
+    "15 patience epochs wastes compute on a diverging run.",
     "Set to 0 to disable early stopping.",
     "Used by: train_model.py script"
   ],
@@ -329,28 +345,28 @@
     "vertical_flip_prob": 0.0,
     "_comment_vflip": "Probability of random vertical flip (low for ads).",
 
-    "rotation_degrees": 15,
-    "_comment_rotation": "Max rotation angle in degrees. Applied with probability 0.4.",
+    "rotation_degrees": 10,
+    "_comment_rotation": "Max rotation angle in degrees. Applied with probability 0.4. Reduced from 15 → 10 to avoid distorting text in ads.",
 
     "color_jitter": {
-      "brightness": 0.15,
-      "_comment_brightness": "Brightness jitter factor. 0 disables.",
-      "contrast": 0.1,
-      "_comment_contrast": "Contrast jitter factor. 0 disables.",
-      "saturation": 0.1,
-      "_comment_saturation": "Saturation jitter factor. 0 disables.",
-      "hue": 0.02,
+      "brightness": 0.3,
+      "_comment_brightness": "Raised from 0.15 → 0.3: stronger colour augmentation helps generalise dominant_colour head.",
+      "contrast": 0.3,
+      "_comment_contrast": "Raised from 0.1 → 0.3.",
+      "saturation": 0.2,
+      "_comment_saturation": "Raised from 0.1 → 0.2.",
+      "hue": 0.05,
       "_comment_hue": [
-        "Hue rotation as a fraction of the full circle [0, 0.5].",
+        "Raised from 0.02 → 0.05 (±18° rotation).",
         "BUG-13 FIX: now performs a real HSV hue rotation (not additive RGB shift)."
       ]
     },
 
-    "random_crop_scale": [0.95, 1.0],
-    "_comment_crop_scale": "Range of crop area relative to original. Applied with probability 0.5.",
+    "random_crop_scale": [0.85, 1.0],
+    "_comment_crop_scale": "Widened from [0.95,1.0] → [0.85,1.0]: more crop variation improves spatial robustness.",
 
-    "random_crop_ratio": [0.9, 1.1],
-    "_comment_crop_ratio": "Range of crop aspect ratio relative to original."
+    "random_crop_ratio": [0.85, 1.15],
+    "_comment_crop_ratio": "Widened from [0.9,1.1] → [0.85,1.15]."
   },
 
   "_comment_attributes": "=== CLASSIFICATION ATTRIBUTES ===",

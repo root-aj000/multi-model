@@ -342,20 +342,22 @@ def setup_training_components(
     else:
         scheduler = base_scheduler
 
-    # Build criterion — supports per-attribute class weights from config.
+    # Build criterion — supports per-attribute class weights and label smoothing from config.
     # CLASS_WEIGHTS must be at the top level of config (not under "model").
     class_weights = cfg.get("CLASS_WEIGHTS", {})
+    label_smoothing = cfg.get("label_smoothing", 0.0)
     if isinstance(class_weights, dict) and class_weights:
         criterion: Any = {}
         for attr_name, weights in class_weights.items():
             if isinstance(weights, list):
                 criterion[attr_name] = torch.nn.CrossEntropyLoss(
                     weight=torch.tensor(weights, dtype=torch.float32, device=device),
+                    label_smoothing=label_smoothing,
                 )
         if not criterion:
-            criterion = torch.nn.CrossEntropyLoss()
+            criterion = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     else:
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     mixup_alpha = cfg.get("mixup_alpha", 0.0)
 
