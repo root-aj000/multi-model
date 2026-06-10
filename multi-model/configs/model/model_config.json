@@ -348,8 +348,8 @@
       "labels": ["Anger", "Excitement", "Fear", "Joy", "Trust"]
     },
     "dominant_colour": {
-      "num_classes": 8,
-      "labels": ["Black", "Blue", "Brown", "Green", "Grey", "Red", "White", "Yellow"]
+      "num_classes": 10,
+      "labels": [    "Red", "Black", "Blue", "Green","White", "Grey", "Yellow", "Brown", "Orange", "Purple"]
     },
     "attention_score": {
       "num_classes": 3,
