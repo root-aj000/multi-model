@@ -360,6 +360,7 @@ class FG_MFN(nn.Module):
 
     def _create_multi_attribute_heads(self, cfg: Dict[str, Any], hidden_dim: int) -> None:
         created = 0
+        dropout = cfg["DROPOUT"]
         for attr_name in ATTRIBUTE_NAMES:
             if attr_name not in cfg["ATTRIBUTES"]:
                 continue
@@ -370,17 +371,17 @@ class FG_MFN(nn.Module):
                 continue
             # Task-specific two-layer head: each attribute gets its own private
             # MLP so gradient conflicts between heads are minimised.
-            # The shared_fc output (hidden_dim) is projected per-attribute
-            # before the final classification layer.
+            # Dropout uses the global DROPOUT config value (not hardcoded 0.15)
+            # so increasing DROPOUT in config automatically regularises all heads.
             head_hidden = max(hidden_dim // 2, num_classes * 4)
             self.attribute_heads[attr_name] = nn.Sequential(
                 nn.Linear(hidden_dim, head_hidden),
                 nn.GELU(),
-                nn.Dropout(0.15),
+                nn.Dropout(dropout),
                 nn.Linear(head_hidden, num_classes),
             )
             created += 1
-            logger.info("Head '%s': %d → %d → %d classes", attr_name, hidden_dim, head_hidden, num_classes)
+            logger.info("Head '%s': %d → %d → %d classes (dropout=%.2f)", attr_name, hidden_dim, head_hidden, num_classes, dropout)
         if created == 0:
             raise ValueError("No attribute heads created. Check ATTRIBUTES in config.")
 

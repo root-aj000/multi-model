@@ -169,7 +169,7 @@ def train_epoch(
     mixup_alpha: float = DEFAULT_MIXUP_ALPHA,
     text_max_length: int = 256,
     attribute_loss_weights: Optional[Dict[str, float]] = None,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one training epoch.
 
@@ -279,7 +279,7 @@ def train_epoch(
     logger.info("Train epoch: loss=%.4f, accuracy=%.4f", avg_loss, accuracy)
     if per_attr_acc_log:
         logger.info("Train per-attribute accuracy: %s", per_attr_acc_log)
-    return avg_loss, accuracy
+    return avg_loss, accuracy, per_attr_acc_log
 
 
 def validate_epoch(
@@ -288,7 +288,7 @@ def validate_epoch(
     criterion: Any,
     device: torch.device,
     text_max_length: int = 256,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one validation epoch.
 
@@ -360,7 +360,7 @@ def validate_epoch(
     logger.info("Val epoch: loss=%.4f, accuracy=%.4f", avg_loss, accuracy)
     if per_attr_acc_log:
         logger.info("Val per-attribute accuracy: %s", per_attr_acc_log)
-    return avg_loss, accuracy
+    return avg_loss, accuracy, per_attr_acc_log
 
 
 def _move_labels_to_device(labels: Any, device: torch.device) -> Any:

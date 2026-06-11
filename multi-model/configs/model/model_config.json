@@ -91,13 +91,17 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
-  "DROPOUT": 0.4,
-  "_comment_DROPOUT": "Dropout probability in [0, 1). Raised from 0.3 → 0.4 to combat overfitting (train/val gap visible by epoch 11 with 4860 training samples).",
+  "DROPOUT": 0.5,
+  "_comment_DROPOUT": "Raised from 0.4 → 0.5. Trust_safety gap=0.32, target_audience gap=0.30 at ep28 indicate the heads need stronger dropout to stop memorising.",
 
-  "FREEZE_BACKBONE": false,
+  "FREEZE_BACKBONE": true,
   "_comment_FREEZE_BACKBONE": [
-    "If true, freeze the pretrained visual backbone convolutional weights.",
-    "The new projection head (fc/classifier) always remains trainable.",
+    "Freeze the pretrained visual backbone convolutional weights.",
+    "Set to true: with 4860 training samples and a 25M-param ResNet-50,",
+    "the backbone was memorising training images (train/val gap on trust_safety=0.32,",
+    "target_audience=0.30 by epoch 28). Freezing forces the model to use general",
+    "ImageNet features which generalise far better on small datasets.",
+    "The cross-modal attention, shared FC, and all heads remain fully trainable.",
     "BUG-23 FIX: previously froze the head too, preventing it from training."
   ],
 
@@ -171,8 +175,8 @@
     "BUG-28 NOTE: setup_training_components reads from the top-level config."
   ],
 
-  "learning_rate": 3e-4,
-  "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC). Raised from 1e-4 → 3e-4.",
+  "learning_rate": 2e-4,
+  "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC). Reduced from 3e-4 → 2e-4: backbone is now frozen so fewer params need large LR.",
 
   "encoder_learning_rate": 2e-5,
   "_comment_encoder_learning_rate": [
@@ -229,12 +233,11 @@
     "Standard image augmentation (already configured) is sufficient."
   ],
 
-  "label_smoothing": 0.1,
+  "label_smoothing": 0.15,
   "_comment_label_smoothing": [
-    "CrossEntropyLoss label smoothing epsilon. 0.0 disables.",
-    "Redistributes 10% of the probability mass uniformly across all classes,",
-    "preventing overconfident predictions on small datasets.",
-    "Particularly helpful when val loss diverges from train loss (as seen at epoch 11).",
+    "Raised from 0.1 → 0.15. The severe train/val gaps on trust_safety (0.32) and",
+    "target_audience (0.30) mean the model is grossly overconfident on training labels.",
+    "0.15 smoothing redistributes 15% of probability mass uniformly, preventing peaks.",
     "Typical values: 0.05–0.15. Higher = stronger regularisation."
   ],
 
