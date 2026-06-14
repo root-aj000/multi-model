@@ -31,7 +31,7 @@ from torch.utils.data import DataLoader
 from lib.models.factory import create_model
 from lib.preprocessing.dataset import CustomDataset, load_dataset
 from lib.preprocessing.image.transforms import DEFAULT_IMAGE_SIZE, build_image_transform
-from lib.preprocessing.text.cleaner import clean_text
+from lib.preprocessing.text.cleaner import clean_text, clean_adcopy
 from lib.preprocessing.text.pipeline import build_text_pipeline
 from lib.preprocessing.text.tokenizer import load_tokenizer, tokenize_text
 from lib.utils.class_weights import compute_class_weights_from_csv, log_class_distribution
@@ -102,14 +102,17 @@ def _build_text_pipeline(config: Dict[str, Any]) -> Optional[Any]:
     tokenizer = load_tokenizer(config.get("TEXT_ENCODER", "distilbert-base-uncased"))
     max_length = config.get("text_max_length", 256)
 
-    # BUG-17 FIX: no redundant default arg — max_length is captured by closure
-# AFTER
-    def tokenizer_fn(text: str, max_length_arg: int = None) -> dict:  # ✅ Accepts 2 args
+    # Use the light ad-copy cleaner for CSV text columns (clean ad copy /
+    # headlines / slogans). The aggressive OCR cleaner strips apostrophes
+    # and most punctuation — fine for noisy OCR output, but lossy for
+    # structured ad copy where "don't miss out!" should stay intact.
+    cleaner = clean_adcopy
+
+    def tokenizer_fn(text: str, max_length_arg: int = None) -> dict:
         actual_max_length = max_length_arg if max_length_arg is not None else max_length
         return tokenize_text(text, max_length=actual_max_length, tokenizer=tokenizer)
 
-
-    return build_text_pipeline(clean_text, tokenizer_fn)
+    return build_text_pipeline(cleaner, tokenizer_fn)
 
 
 def load_datasets(config: Dict[str, Any]) -> Tuple[CustomDataset, CustomDataset]:

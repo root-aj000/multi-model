@@ -91,10 +91,10 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
-  "DROPOUT": 0.5,
+  "DROPOUT": 0.4,
   "_comment_DROPOUT": "Raised from 0.4 → 0.5. Trust_safety gap=0.32, target_audience gap=0.30 at ep28 indicate the heads need stronger dropout to stop memorising.",
 
-  "FREEZE_BACKBONE": true,
+  "FREEZE_BACKBONE": false,
   "_comment_FREEZE_BACKBONE": [
     "Freeze the pretrained visual backbone convolutional weights.",
     "Set to true: with 4860 training samples and a 25M-param ResNet-50,",
@@ -178,14 +178,14 @@
   "learning_rate": 2e-4,
   "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC). Reduced from 3e-4 → 2e-4: backbone is now frozen so fewer params need large LR.",
 
-  "encoder_learning_rate": 2e-5,
+  "encoder_learning_rate": 1.5e-5,
   "_comment_encoder_learning_rate": [
     "LR for the pretrained text encoder (text_module.encoder).",
     "Should be ~10-25x lower than learning_rate to avoid catastrophic forgetting.",
     "Raised from 5e-6 → 2e-5: the encoder was barely fine-tuning at 5e-6."
   ],
 
-  "weight_decay": 5e-3,
+  "weight_decay": 0.01,
   "_comment_weight_decay": [
     "L2 regularisation applied to non-bias, non-LayerNorm parameters.",
     "Raised from 1e-3 → 5e-3 to combat overfitting on small dataset (4860 samples).",
@@ -233,7 +233,7 @@
     "Standard image augmentation (already configured) is sufficient."
   ],
 
-  "label_smoothing": 0.15,
+  "label_smoothing": 0.2,
   "_comment_label_smoothing": [
     "Raised from 0.1 → 0.15. The severe train/val gaps on trust_safety (0.32) and",
     "target_audience (0.30) mean the model is grossly overconfident on training labels.",
