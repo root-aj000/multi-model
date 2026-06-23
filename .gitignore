@@ -39,7 +39,7 @@ Thumbs.db
 .env
 
 docs/
-*.md
+
 dataset/
 docs/
 
