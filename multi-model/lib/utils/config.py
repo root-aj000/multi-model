@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 # Project root is three levels up from this file:
 #   lib/utils/config.py  →  lib/utils/  →  lib/  →  project root
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[4] 
 
 
 def load_config(config_path: str) -> Dict[str, Any]:

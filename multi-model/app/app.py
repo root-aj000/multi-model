@@ -39,7 +39,7 @@ MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10 MB
 UPLOAD_DIR: Path = Path("uploads")
 
 # Default config path for the prediction pipeline
-DEFAULT_CONFIG_PATH = "configs/model/model_config.json"
+DEFAULT_CONFIG_PATH = "backup/multi-model/configs/model/model_config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -62,8 +62,48 @@ async def lifespan(application: FastAPI):
             from use_cases.prediction.pipeline import build_prediction_pipeline
             from app.predict import configure_predictor
             from lib.ocr.factory import create_ocr_engine
+            from lib.utils.config import load_config
 
-            predictor = build_prediction_pipeline(config_path)
+            # Resolve checkpoint path:
+            #   1. CHECKPOINT_PATH env var (explicit override)
+            #   2. config["checkpoint_path"] if set
+            #   3. config["checkpoint_dir"]/<best-or-last>.pt
+            #   4. fallback: most recent .pt in saved_models/
+            checkpoint_path = os.environ.get("CHECKPOINT_PATH")
+            config_data = load_config(config_path)
+
+            if not checkpoint_path:
+                checkpoint_path = config_data.get("checkpoint_path")
+
+            if not checkpoint_path:
+                checkpoint_dir = Path(
+                    config_data.get("checkpoint_dir", "saved_models")
+                )
+                # Prefer best_model_*.pt (sorted by accuracy in filename),
+                # fall back to last_model.pt, then any .pt file.
+                best_candidates = sorted(checkpoint_dir.glob("best_model_*.pt"))
+                last_candidate = checkpoint_dir / "last_model.pt"
+                if best_candidates:
+                    checkpoint_path = str(best_candidates[-1])
+                elif last_candidate.exists():
+                    checkpoint_path = str(last_candidate)
+                else:
+                    any_candidates = sorted(
+                        checkpoint_dir.glob("*.pt"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    if any_candidates:
+                        checkpoint_path = str(any_candidates[0])
+
+            if not checkpoint_path:
+                raise FileNotFoundError(
+                    "No checkpoint found. Set CHECKPOINT_PATH env var, "
+                    "set 'checkpoint_path' in config, or place a .pt file "
+                    f"in {config_data.get('checkpoint_dir', 'saved_models')}/."
+                )
+
+            predictor = build_prediction_pipeline(config_path, checkpoint_path)
             ocr_model_dir = Path("local/ocr")
             ocr_engine = create_ocr_engine("easyocr", ocr_model_dir)
             configure_predictor(predictor, ocr_engine)
@@ -156,6 +196,28 @@ app.include_router(admin_router)
 # Invites router — team invitation management
 from app.invites_router import router as invites_router  # noqa: E402
 app.include_router(invites_router)
+
+
+# ---------------------------------------------------------------------------
+# Root endpoint — basic service info (avoids 404 on GET /)
+# ---------------------------------------------------------------------------
+@app.get("/", tags=["meta"])
+def root() -> Dict[str, Any]:
+    """Return basic service info and a list of mounted routes."""
+    return {
+        "service": "Multi-Model Prediction API",
+        "version": "2.0.0",
+        "docs": "/docs",
+        "openapi": "/openapi.json",
+        "auth_enabled": is_auth_enabled(),
+        "endpoints": [route.path for route in app.routes],
+    }
+
+
+@app.get("/health", tags=["meta"])
+def health() -> Dict[str, str]:
+    """Lightweight liveness probe."""
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

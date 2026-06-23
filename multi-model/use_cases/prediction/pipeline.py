@@ -10,10 +10,10 @@ All defaults (OCR engine, model dir, language) are read from
 model_config.json (ocr section) rather than hardcoded here.
 """
 
-import logging
+import logging 
 from pathlib import Path
 from typing import Any, Dict
-
+from lib.utils.logging import logger
 import torch
 
 from lib.models.factory import load_model

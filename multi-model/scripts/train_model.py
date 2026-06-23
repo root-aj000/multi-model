@@ -1,22 +1,16 @@
 """
 Training script for the FG_MFN model.
 
-Outputs a live per-epoch table to the terminal showing train/val metrics
-side-by-side for every attribute, plus a trend bar and gap column.
-No extra dependencies — uses only the Python stdlib (shutil for term width).
-
-All defaults are read from model_config.json; CLI flags override them.
+Runs the training loop with configurable epochs, learning rate,
+and warmup schedule. Outputs training metrics to the console and
+saves the best model checkpoint.
 """
 
 import argparse
 import logging
 import os
 import re
-import shutil
-import sys
-import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import torch
 
@@ -28,235 +22,22 @@ from use_cases.training.train_model import train_epoch, validate_epoch
 
 logger = logging.getLogger(__name__)
 
+# Default number of training epochs
+DEFAULT_EPOCHS = 100
+
+# Default number of warmup epochs
+DEFAULT_WARMUP_EPOCHS = 3
+
+# Default base learning rate
+DEFAULT_BASE_LR = 0.001
+
+# Default configuration file path
 DEFAULT_CONFIG_PATH = "configs/model/model_config.json"
 
 BEST_CHECKPOINT_PATTERN = re.compile(
     r"^best_model_epoch_(\d+)(?:_acc_([0-9]+\.[0-9]+))?\.pt$"
 )
 
-# ── Attribute display order and short names ────────────────────────────────
-ATTR_DISPLAY = [
-    ("theme",            "Theme         "),
-    ("dominant_colour",  "Dom. Colour   "),
-    ("sentiment",        "Sentiment     "),
-    ("emotion",          "Emotion       "),
-    ("trust_safety",     "Trust/Safety  "),
-    ("target_audience",  "Target Aud.   "),
-    ("attention_score",  "Attn Score    "),
-    ("predicted_ctr",    "Pred. CTR     "),
-    ("likelihood_shares","Likelihood Sh."),
-]
-
-# Attributes whose ceiling is known to be ~50% (behavioural noise)
-NOISE_ATTRS = {"attention_score", "predicted_ctr", "likelihood_shares"}
-
-
-# ── Terminal helpers ───────────────────────────────────────────────────────
-
-def _term_width() -> int:
-    return shutil.get_terminal_size(fallback=(120, 40)).columns
-
-
-def _bar(value: float, width: int = 10) -> str:
-    """Compact ASCII progress bar: [████░░░░░░]"""
-    filled = round(value * width)
-    return "[" + "█" * filled + "░" * (width - filled) + "]"
-
-
-def _delta_str(current: float, previous: Optional[float]) -> str:
-    """Return a coloured delta string: ↑+0.012 or ↓-0.008 or  ——"""
-    if previous is None:
-        return "  ——  "
-    diff = current - previous
-    if abs(diff) < 5e-4:
-        return "  ——  "
-    arrow = "↑" if diff > 0 else "↓"
-    return f"{arrow}{diff:+.4f}"
-
-
-def _acc_str(val: float, attr: str, best: Optional[float]) -> str:
-    """Format accuracy: dim noise attrs, mark personal-bests with ★"""
-    marker = "★" if (best is not None and abs(val - best) < 1e-6) else " "
-    return f"{marker}{val:.4f}"
-
-
-def _gap_indicator(gap: float) -> str:
-    """Visual indicator of the train/val gap."""
-    if gap < 0.05:
-        return "✓"
-    if gap < 0.15:
-        return "~"
-    if gap < 0.25:
-        return "!"
-    return "✗"  # severe overfit
-
-
-# ── Header / epoch table printer ──────────────────────────────────────────
-
-_TABLE_HEADER_PRINTED = False
-_PREV_VAL: Dict[str, float] = {}
-_BEST_VAL: Dict[str, float] = {}
-
-
-def _print_run_header(config: dict, num_epochs: int, device: torch.device) -> None:
-    """Print a one-time banner before training starts."""
-    w = min(_term_width(), 100)
-    sep = "═" * w
-    print(f"\n{sep}")
-    print(f"  FG-MFN  │  {config.get('IMAGE_BACKBONE','?')} + "
-          f"{config.get('TEXT_ENCODER','?')}  │  fusion={config.get('FUSION_TYPE','?')}  │  "
-          f"hidden={config.get('HIDDEN_DIM','?')}")
-    print(f"  device={device}  │  epochs={num_epochs}  │  "
-          f"batch={config.get('batch_size','?')}  │  "
-          f"lr={config.get('learning_rate','?')}  │  "
-          f"enc_lr={config.get('encoder_learning_rate','?')}")
-    frozen = config.get('FREEZE_BACKBONE', False)
-    smooth = config.get('label_smoothing', 0.0)
-    warmup = config.get('warmup_epochs', 0)
-    print(f"  freeze_backbone={frozen}  │  label_smoothing={smooth}  │  "
-          f"warmup={warmup}  │  dropout={config.get('DROPOUT','?')}")
-    print(sep)
-
-
-def _print_epoch_table(
-    epoch: int,
-    num_epochs: int,
-    train_loss: float,
-    val_loss: float,
-    train_acc: float,
-    val_acc: float,
-    train_per_attr: Dict[str, float],
-    val_per_attr: Dict[str, float],
-    best_val_acc: float,
-    best_val_epoch: int,
-    epochs_no_improve: int,
-    patience: int,
-    elapsed: float,
-    lr_current: float,
-) -> None:
-    """
-    Print a clean per-epoch summary table.
-
-    Layout:
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │  Epoch  8 / 100  │  Best val: 0.6565 @ ep 8  │  No improve: 0 / 10 │
-    │  Time: 42.1s  │  LR: 3.00e-04  │  Train loss: 5.84  Val loss: 7.14 │
-    ├──────────────────┬──────────────┬──────────────┬───────┬────────────┤
-    │ Attribute        │  Train       │  Val         │  Gap  │  Trend     │
-    ├──────────────────┼──────────────┼──────────────┼───────┼────────────┤
-    │ Theme            │ ★0.9284      │ ★0.9370      │  0.01 │ ↑+0.0124   │
-    │ ...              │              │              │       │            │
-    ├──────────────────┼──────────────┼──────────────┼───────┼────────────┤
-    │ OVERALL          │  0.6302      │  0.6398      │  0.01 │            │
-    └──────────────────┴──────────────┴──────────────┴───────┴────────────┘
-    """
-    global _PREV_VAL, _BEST_VAL
-
-    # Column widths
-    W_ATTR  = 16
-    W_VAL   = 13
-    W_GAP   = 7
-    W_TREND = 10
-    total_w = W_ATTR + 2 + W_VAL + 2 + W_VAL + 2 + W_GAP + 2 + W_TREND + 1
-
-    hbar  = "─" * total_w
-    thick = "═" * total_w
-
-    new_best = (val_acc >= best_val_acc - 1e-6)
-    best_marker = " ★ NEW BEST" if new_best else ""
-
-    # ── Header rows ──────────────────────────────────────────────────────
-    print(f"\n┌{thick}┐")
-    left = (f"  Epoch {epoch:>3} / {num_epochs}"
-            f"  │  Best val: {best_val_acc:.4f} @ ep {best_val_epoch}"
-            f"{best_marker}")
-    right = f"No improve: {epochs_no_improve} / {patience}  "
-    pad = total_w - len(left) - len(right) - 2
-    print(f"│{left}{' ' * max(pad, 1)}{right}│")
-
-    left2 = f"  Time: {elapsed:.1f}s  │  LR: {lr_current:.2e}"
-    right2 = f"Train loss: {train_loss:.4f}   Val loss: {val_loss:.4f}  "
-    pad2 = total_w - len(left2) - len(right2) - 2
-    print(f"│{left2}{' ' * max(pad2, 1)}{right2}│")
-
-    # ── Column header ────────────────────────────────────────────────────
-    print(f"├{'─'*W_ATTR}┬{'─'*W_VAL}┬{'─'*W_VAL}┬{'─'*W_GAP}┬{'─'*W_TREND}┤")
-    print(f"│{'Attribute':^{W_ATTR}}│{'Train':^{W_VAL}}│{'Val':^{W_VAL}}│"
-          f"{'Gap':^{W_GAP}}│{'Trend (val)':^{W_TREND}}│")
-    print(f"├{'─'*W_ATTR}┼{'─'*W_VAL}┼{'─'*W_VAL}┼{'─'*W_GAP}┼{'─'*W_TREND}┤")
-
-    # ── Per-attribute rows ────────────────────────────────────────────────
-    for attr_key, attr_label in ATTR_DISPLAY:
-        t = train_per_attr.get(attr_key)
-        v = val_per_attr.get(attr_key)
-        if t is None or v is None:
-            continue
-
-        best_v = _BEST_VAL.get(attr_key)
-        if best_v is None or v > best_v:
-            _BEST_VAL[attr_key] = v
-            best_v = v
-
-        prev_v = _PREV_VAL.get(attr_key)
-        gap    = t - v
-        gap_ind = _gap_indicator(gap)
-
-        t_str   = f" {t:.4f} "
-        v_str   = f" {_acc_str(v, attr_key, best_v)} "
-        gap_str = f" {gap:.3f}{gap_ind}"
-        dlt_str = f" {_delta_str(v, prev_v)}"
-
-        # Dim noise attributes with a "(noise)" marker
-        label = attr_label.strip()
-        if attr_key in NOISE_ATTRS:
-            label = f"{label}*"
-
-        print(f"│{label:<{W_ATTR}}│{t_str:^{W_VAL}}│{v_str:^{W_VAL}}│"
-              f"{gap_str:^{W_GAP}}│{dlt_str:^{W_TREND}}│")
-
-    # ── Overall row ──────────────────────────────────────────────────────
-    print(f"├{'─'*W_ATTR}┼{'─'*W_VAL}┼{'─'*W_VAL}┼{'─'*W_GAP}┼{'─'*W_TREND}┤")
-    ov_gap = train_acc - val_acc
-    prev_ov = _PREV_VAL.get("__overall__")
-    print(f"│{'OVERALL':<{W_ATTR}}│{f' {train_acc:.4f} ':^{W_VAL}}│"
-          f"{f' {val_acc:.4f} ':^{W_VAL}}│"
-          f"{f' {ov_gap:.3f}{_gap_indicator(ov_gap)}':^{W_GAP}}│"
-          f"{f' {_delta_str(val_acc, prev_ov)}':^{W_TREND}}│")
-    print(f"└{'─'*W_ATTR}┴{'─'*W_VAL}┴{'─'*W_VAL}┴{'─'*W_GAP}┴{'─'*W_TREND}┘")
-    print(f"  * noise-ceiling attributes (behavioural, not predictable from content)")
-
-    # Update prev for next epoch
-    for attr_key, _ in ATTR_DISPLAY:
-        if attr_key in val_per_attr:
-            _PREV_VAL[attr_key] = val_per_attr[attr_key]
-    _PREV_VAL["__overall__"] = val_acc
-
-
-def _print_final_summary(
-    best_val_acc: float,
-    best_val_epoch: int,
-    history: List[Dict],
-) -> None:
-    """Print a compact run summary after training finishes."""
-    w = min(_term_width(), 100)
-    sep = "═" * w
-    print(f"\n{sep}")
-    print(f"  Training complete  │  Best val accuracy: {best_val_acc:.4f}  @ epoch {best_val_epoch}")
-
-    # Print peak val per attribute
-    if history:
-        best_ep = history[best_val_epoch - 1]
-        print(f"\n  Per-attribute accuracy at best epoch ({best_val_epoch}):")
-        for attr_key, attr_label in ATTR_DISPLAY:
-            t = best_ep["train_per_attr"].get(attr_key, 0.0)
-            v = best_ep["val_per_attr"].get(attr_key, 0.0)
-            bar = _bar(v)
-            noise = "*" if attr_key in NOISE_ATTRS else " "
-            print(f"    {attr_label.strip():<16}{noise}  val={v:.4f} {bar}  train={t:.4f}  gap={t-v:+.4f}")
-    print(sep)
-
-
-# ── Checkpoint helpers ─────────────────────────────────────────────────────
 
 def _find_best_checkpoints(save_dir: Path):
     checkpoints = []
@@ -274,10 +55,15 @@ def _prune_best_checkpoints(save_dir: Path, keep: int = 2) -> None:
     checkpoints = _find_best_checkpoints(save_dir)
     if len(checkpoints) <= keep:
         return
+
+    # Keep the top-N checkpoints by validation accuracy, breaking ties by epoch.
     sorted_checkpoints = sorted(
-        checkpoints, key=lambda item: (item[2], item[1]), reverse=True,
+        checkpoints,
+        key=lambda item: (item[2], item[1]),
+        reverse=True,
     )
-    for path, _, _ in sorted_checkpoints[keep:]:
+    to_remove = sorted_checkpoints[keep:]
+    for path, _, _ in to_remove:
         try:
             path.unlink()
             logger.info("Removed old checkpoint: %s", path)
@@ -285,153 +71,91 @@ def _prune_best_checkpoints(save_dir: Path, keep: int = 2) -> None:
             logger.warning("Failed to remove checkpoint %s: %s", path, exc)
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
-
 def main() -> None:
+    """
+    Wire the training use case and run training.
+
+    Parses command-line arguments, builds the training pipeline,
+    and executes the training loop with validation after each epoch.
+    """
     parser = argparse.ArgumentParser(
-        description="Train the FG_MFN multi-task ad-analysis model.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python scripts/train_model.py
-  python scripts/train_model.py --epochs 50 --batch-size 32
-  python scripts/train_model.py --config my_config.json --log-dir runs/exp1
-  python scripts/train_model.py --no-table          # plain text output
-        """,
-    )
-
-    # ── Config & paths ──────────────────────────────────────────────────
-    parser.add_argument(
-        "--config", type=str, default=DEFAULT_CONFIG_PATH,
-        help=f"Path to JSON config file (default: {DEFAULT_CONFIG_PATH})",
+        description="Train the FG_MFN model",
     )
     parser.add_argument(
-        "--log-dir", type=str, default=None,
-        help="Directory to store training logs CSV (overrides config log_dir)",
+        "--config",
+        type=str,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to the training configuration file",
     )
     parser.add_argument(
-        "--checkpoint-dir", type=str, default=None,
-        help="Directory to save checkpoints (overrides config checkpoint_dir)",
-    )
-
-    # ── Training overrides ──────────────────────────────────────────────
-    parser.add_argument(
-        "--epochs", type=int, default=None,
-        help="Total training epochs (overrides config epochs)",
+        "--epochs",
+        type=int,
+        default=None,
+        help="Number of training epochs (overrides config)",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=None,
-        help="Batch size (overrides config batch_size)",
+        "--warmup-epochs",
+        type=int,
+        default=None,
+        help="Override the warmup epoch count from config",
     )
     parser.add_argument(
-        "--lr", type=float, default=None,
-        help="Learning rate for new layers (overrides config learning_rate)",
+        "--mixup-alpha",
+        type=float,
+        default=None,
+        help="Mixup alpha value to override the config",
     )
     parser.add_argument(
-        "--encoder-lr", type=float, default=None,
-        help="LR for the pretrained text encoder (overrides config encoder_learning_rate)",
+        "--early-stopping-patience",
+        type=int,
+        default=5,
+        help="Stop training if validation accuracy does not improve for this many epochs",
     )
     parser.add_argument(
-        "--warmup-epochs", type=int, default=None,
-        help="Linear warmup epochs (overrides config warmup_epochs)",
+        "--log-dir",
+        type=str,
+        default="local/logs",
+        help="Directory to store training logs",
     )
-    parser.add_argument(
-        "--mixup-alpha", type=float, default=None,
-        help="Mixup alpha; 0 disables Mixup (overrides config mixup_alpha)",
-    )
-    parser.add_argument(
-        "--early-stopping-patience", type=int, default=None,
-        help="Early-stopping patience in epochs (overrides config; 0 disables)",
-    )
-    parser.add_argument(
-        "--freeze-backbone", action="store_true", default=None,
-        help="Freeze the visual backbone (overrides config FREEZE_BACKBONE)",
-    )
-
-    # ── Output control ──────────────────────────────────────────────────
-    parser.add_argument(
-        "--no-table", action="store_true",
-        help="Print plain one-line output per epoch instead of the full table",
-    )
-    parser.add_argument(
-        "--quiet", action="store_true",
-        help="Suppress all INFO logging (warnings and errors still shown)",
-    )
-
     args = parser.parse_args()
 
-    # ── Logging setup ───────────────────────────────────────────────────
-    log_level = logging.WARNING if args.quiet else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(levelname)s:%(name)s:%(message)s",
-        stream=sys.stderr,       # keep logs on stderr, table on stdout
-    )
+    logging.basicConfig(level=logging.INFO)
 
-    # ── Load and patch config ────────────────────────────────────────────
     config = load_config(args.config)
-    if args.epochs is not None:
-        config["epochs"] = args.epochs
-    if args.batch_size is not None:
-        config["batch_size"] = args.batch_size
-    if args.lr is not None:
-        config["learning_rate"] = args.lr
-    if args.encoder_lr is not None:
-        config["encoder_learning_rate"] = args.encoder_lr
     if args.warmup_epochs is not None:
         config["warmup_epochs"] = args.warmup_epochs
     if args.mixup_alpha is not None:
         config["mixup_alpha"] = args.mixup_alpha
-    if args.early_stopping_patience is not None:
-        config["early_stopping_patience"] = args.early_stopping_patience
-    if args.freeze_backbone:
-        config["FREEZE_BACKBONE"] = True
 
-    # ── Build pipeline ───────────────────────────────────────────────────
     pipeline = build_training_pipeline(config)
 
-    model        = pipeline["model"]
+    model = pipeline["model"]
     train_loader = pipeline["train_loader"]
-    val_loader   = pipeline["val_loader"]
-    optimizer    = pipeline["optimizer"]
-    criterion    = pipeline["criterion"]
-    scheduler    = pipeline.get("scheduler")
-    attribute_loss_weights = pipeline.get("attribute_loss_weights", {})
+    val_loader = pipeline["val_loader"]
+    optimizer = pipeline["optimizer"]
+    criterion = pipeline["criterion"]
+    scheduler = pipeline.get("scheduler")
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    if torch.cuda.is_available():
-        n = torch.cuda.device_count()
-        gpu_names = [torch.cuda.get_device_name(i) for i in range(n)]
-        print(f"Using {n} GPU(s): {gpu_names}", file=sys.stderr)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    num_epochs  = config.get("epochs", 100)
-    log_dir     = args.log_dir or config.get("log_dir", "local/logs")
-    ckpt_dir    = Path(args.checkpoint_dir or config.get("checkpoint_dir", "saved_models"))
-    text_max_length = config.get("text_max_length", 256)
+    num_epochs = args.epochs or config.get("epochs", DEFAULT_EPOCHS)
+
+    training_logger = TrainingLogger(args.log_dir)
     mixup_alpha = config.get("mixup_alpha", 0.0)
-    early_stop_patience = config.get("early_stopping_patience", 5)
+    # text_max_length must match the value in config so fallback tensors
+    # in train_epoch/validate_epoch have the correct sequence length.
+    text_max_length = config.get("text_max_length", 256)
+    early_stopping_patience = args.early_stopping_patience
+    epochs_without_improvement = 0
+    best_val_accuracy = -1.0
 
-    training_logger       = TrainingLogger(log_dir)
-    epochs_without_improve = 0
-    best_val_acc          = -1.0
-    best_val_epoch        = 1
-    history: List[Dict]   = []
-    use_table             = not args.no_table
-
-    if use_table:
-        _print_run_header(config, num_epochs, device)
-
-    # ── Training loop ────────────────────────────────────────────────────
     for epoch in range(num_epochs):
-        t0 = time.time()
-
-        train_loss, train_acc, train_per_attr = train_epoch(
+        train_loss, train_accuracy = train_epoch(
             model, train_loader, criterion, optimizer, device,
             mixup_alpha=mixup_alpha,
             text_max_length=text_max_length,
-            attribute_loss_weights=attribute_loss_weights,
         )
-        val_loss, val_acc, val_per_attr = validate_epoch(
+        val_loss, val_accuracy = validate_epoch(
             model, val_loader, criterion, device,
             text_max_length=text_max_length,
         )
@@ -439,109 +163,64 @@ Examples:
         if scheduler is not None:
             scheduler.step()
 
-        elapsed = time.time() - t0
+        metrics = {
+            "train_loss": train_loss,
+            "train_accuracy": train_accuracy,
+            "val_loss": val_loss,
+            "val_accuracy": val_accuracy,
+        }
+        training_logger.log_metrics(metrics, epoch + 1)
 
-        # Get current LR from first param group
-        lr_current = optimizer.param_groups[0]["lr"]
+        print(
+            f"Epoch {epoch + 1}/{num_epochs} | "
+            f"Train Loss: {train_loss:.4f} | Train Acc: {train_accuracy:.4f} | "
+            f"Val Loss: {val_loss:.4f} | Val Acc: {val_accuracy:.4f}"
+        )
 
-        # ── Log to CSV ──────────────────────────────────────────────────
-        training_logger.log_metrics({
-            "train_loss": train_loss, "train_accuracy": train_acc,
-            "val_loss": val_loss,     "val_accuracy": val_acc,
-        }, epoch + 1)
-
-        history.append({
-            "epoch": epoch + 1,
-            "train_loss": train_loss, "val_loss": val_loss,
-            "train_acc": train_acc,   "val_acc": val_acc,
-            "train_per_attr": train_per_attr,
-            "val_per_attr": val_per_attr,
-        })
-
-        # ── Checkpoint ──────────────────────────────────────────────────
-        new_best = val_acc > best_val_acc
-        if new_best:
-            best_val_acc   = val_acc
-            best_val_epoch = epoch + 1
-            epochs_without_improve = 0
-            ckpt_dir.mkdir(parents=True, exist_ok=True)
-            best_path = ckpt_dir / f"best_model_epoch_{epoch+1}_acc_{val_acc:.4f}.pt"
-            best_tmp  = ckpt_dir / f"{best_path.name}.tmp"
-            state_dict = (
-                model.module.state_dict()
-                if isinstance(model, torch.nn.DataParallel)
-                else model.state_dict()
-            )
-            torch.save(state_dict, best_tmp)
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            epochs_without_improvement = 0
+            save_dir = Path("saved_models")
+            save_dir.mkdir(parents=True, exist_ok=True)
+            best_path = save_dir / f"best_model_epoch_{epoch + 1}_acc_{val_accuracy:.4f}.pt"
+            best_tmp = save_dir / f"{best_path.name}.tmp"
+            torch.save(model.state_dict(), best_tmp)
             os.replace(best_tmp, best_path)
-            _prune_best_checkpoints(ckpt_dir, keep=2)
+            _prune_best_checkpoints(save_dir, keep=2)
+            print(f"  -> Saved best model to {best_path}")
         else:
-            epochs_without_improve += 1
+            epochs_without_improvement += 1
 
-        # ── Print output ─────────────────────────────────────────────────
-        if use_table:
-            _print_epoch_table(
-                epoch=epoch + 1,
-                num_epochs=num_epochs,
-                train_loss=train_loss,
-                val_loss=val_loss,
-                train_acc=train_acc,
-                val_acc=val_acc,
-                train_per_attr=train_per_attr,
-                val_per_attr=val_per_attr,
-                best_val_acc=best_val_acc,
-                best_val_epoch=best_val_epoch,
-                epochs_no_improve=epochs_without_improve,
-                patience=early_stop_patience,
-                elapsed=elapsed,
-                lr_current=lr_current,
-            )
-            if new_best:
-                print(f"  ★ Saved best model → {best_path}")
-        else:
-            # Plain one-liner
-            mark = "★" if new_best else " "
+        if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
             print(
-                f"{mark}Epoch {epoch+1:>3}/{num_epochs} | "
-                f"T-loss:{train_loss:.4f} T-acc:{train_acc:.4f} | "
-                f"V-loss:{val_loss:.4f} V-acc:{val_acc:.4f} | "
-                f"best:{best_val_acc:.4f}@ep{best_val_epoch} | "
-                f"patience:{epochs_without_improve}/{early_stop_patience} | "
-                f"{elapsed:.1f}s"
+                f"Early stopping triggered after {epochs_without_improvement} epochs "
+                f"without improvement."
             )
-
-        # ── Early stopping ───────────────────────────────────────────────
-        if (early_stop_patience > 0
-                and epochs_without_improve >= early_stop_patience):
-            print(f"\n  Early stopping: no improvement for {epochs_without_improve} epochs.")
             break
 
-    # ── Save last checkpoint ─────────────────────────────────────────────
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    last_path = ckpt_dir / "last_model.pt"
-    last_tmp  = ckpt_dir / "last_model.pt.tmp"
-    state_dict = (
-        model.module.state_dict()
-        if isinstance(model, torch.nn.DataParallel)
-        else model.state_dict()
-    )
-    torch.save(state_dict, last_tmp)
+    os.makedirs("saved_models", exist_ok=True)
+    last_path = "saved_models/last_model.pt"
+    last_tmp = f"{last_path}.tmp"
+    torch.save(model.state_dict(), last_tmp)
     os.replace(last_tmp, last_path)
-    print(f"\n  Saved last model → {last_path}")
+    print(f"  -> Saved last model to {last_path}")
 
     training_logger.close()
+    print(f"Training complete. Best validation accuracy: {best_val_accuracy:.4f}")
 
-    # ── Final summary ─────────────────────────────────────────────────────
-    if use_table:
-        _print_final_summary(best_val_acc, best_val_epoch, history)
-
-    # ── Visualizations ────────────────────────────────────────────────────
-    print("\n  Generating training visualizations...")
-    training_log_path = Path(log_dir) / "training_log.csv"
-    viz_results = generate_all_training_visualizations(str(training_log_path), log_dir)
+    # Generate training visualizations
+    print("\n" + "="*60)
+    print("Generating training visualizations...")
+    print("="*60)
+    training_log_path = Path(args.log_dir) / "training_log.csv"
+    viz_results = generate_all_training_visualizations(
+        str(training_log_path),
+        args.log_dir
+    )
     for viz_name, success in viz_results.items():
-        status = "✓" if success else "✗"
-        print(f"    {status} {viz_name}")
+        status = "✓ Generated" if success else "✗ Failed/Skipped"
+        print(f"  {status}: {viz_name}")
+    print("="*60)
 
 
 if __name__ == "__main__":
