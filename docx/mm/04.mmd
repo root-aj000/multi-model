@@ -1,0 +1,31 @@
+flowchart TD
+    subgraph Data["Data Loading"]
+        CSV["CSV Dataset<br/>image_path, ad_copy,<br/>9 label columns,<br/>keywords, cta, monetary"]
+        DS["CustomDataset<br/>__getitem__ →<br/>(image_tensor, input_ids,<br/>attention_mask, labels_dict)"]
+        DL["DataLoader<br/>batch_size=64<br/>drop_last=True<br/>num_workers=8"]
+    end
+
+    subgraph Forward["Forward Pass"]
+        MODEL["FG_MFN.forward<br/>→ 9 logit tensors"]
+    end
+
+    subgraph Loss["Loss Computation"]
+        CE["Per-attribute CE Loss<br/>label_smoothing=0.2"]
+        WTD["Weighted Sum<br/>× ATTRIBUTE_LOSS_WEIGHTS"]
+        TOT["Total Loss<br/>L = Σ λ_k · L_k"]
+    end
+
+    subgraph Optim["Optimisation"]
+        ADAM["AdamW<br/>lr=2e-4 (heads)<br/>encoder_lr=1.5e-5<br/>weight_decay=0.01"]
+        SCHED["SequentialLR<br/>LinearWarmup (5 ep)<br/>→ CosineAnnealing"]
+    end
+
+    subgraph Eval["Validation & Checkpointing"]
+        METRICS["Per-attribute Acc<br/>+ Macro-F1"]
+        ES["Early Stopping<br/>patience=10<br/>→ best_model.pt"]
+    end
+
+    CSV --> DS --> DL --> MODEL
+    MODEL --> CE --> WTD --> TOT
+    TOT --> ADAM --> SCHED
+    MODEL --> METRICS --> ES

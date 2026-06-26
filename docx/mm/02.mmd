@@ -1,0 +1,30 @@
+
+flowchart LR
+    subgraph Input["Native Embeddings"]
+        V["v ∈ ℝ^512<br/>(Visual)"]
+        T["t ∈ ℝ^768<br/>(Text)"]
+    end
+
+    subgraph Project["Linear Projection"]
+        VP["v_proj ∈ ℝ^768<br/>W_v · v + b_v"]
+        TP["t_proj ∈ ℝ^768<br/>W_t · t + b_t"]
+    end
+
+    subgraph Attn["Bidirectional MHA (8 heads, d_k=96)"]
+        V2T["v2t: Q=v_proj<br/>K=t_proj, V=t_proj"]
+        T2V["t2v: Q=t_proj<br/>K=v_proj, V=v_proj"]
+    end
+
+    subgraph Residual["Residual + LayerNorm"]
+        R1["v_out = LN(v_proj + v_attended)"]
+        R2["t_out = LN(t_proj + t_attended)"]
+    end
+
+    subgraph Output["Fusion Output"]
+        CAT["[v_out ; t_out] ∈ ℝ^1536"]
+        PROJ["m = W_f · cat + b_f<br/>m ∈ ℝ^512"]
+    end
+
+    V --> VP --> V2T --> R1 --> CAT
+    T --> TP --> T2V --> R2 --> CAT
+    CAT --> PROJ

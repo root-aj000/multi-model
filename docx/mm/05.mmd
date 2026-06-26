@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant Client
+    participant FastAPI as FastAPI Server
+    participant Preprocess as Preprocessing
+    participant OCR as OCR Engine
+    participant Model as FG_MFN Model
+
+    Client->>FastAPI: POST /predict (image + optional ad_copy)
+    FastAPI->>Preprocess: Load & preprocess image
+    alt ad_copy provided
+        FastAPI->>Preprocess: Tokenise ad_copy
+    else ad_copy missing
+        FastAPI->>OCR: Extract text from image
+        OCR-->>FastAPI: Extracted text string
+        FastAPI->>Preprocess: Tokenise OCR text
+    end
+    Preprocess-->>FastAPI: image_tensor, input_ids, attention_mask
+    FastAPI->>Model: FG_MFN.forward(image, ids, mask)
+    Model-->>FastAPI: 9 logit tensors
+    FastAPI->>FastAPI: Softmax + argmax per attribute<br/>→ label lookup from config
+    FastAPI-->>Client: JSON {attribute: {label, confidence, scores}}

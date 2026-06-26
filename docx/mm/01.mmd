@@ -1,0 +1,52 @@
+flowchart TB
+    subgraph Input["Input Stage"]
+        I["Advertisement Image I<br/>(3 × 224 × 224)"]
+        T["Ad Copy Text T<br/>(raw string)"]
+    end
+
+    subgraph Visual["Visual Encoding"]
+        R18["ResNet-18<br/>(pretrained on ImageNet)"]
+        GAP["Global Average Pooling"]
+        V["v ∈ ℝ^512<br/>(native visual embedding)"]
+        I --> R18 --> GAP --> V
+    end
+
+    subgraph Text["Textual Encoding"]
+        TOK["DistilBERT Tokenizer<br/>(max_length = 256)"]
+        DB["DistilBERT<br/>(6-layer Transformer)"]
+        AWP["Attention-Weighted Pooling"]
+        TE["t ∈ ℝ^768<br/>(native text embedding)"]
+        T --> TOK --> DB --> AWP --> TE
+    end
+
+    subgraph Fusion["Cross-Modal Fusion"]
+        VP["v_proj = W_v · v + b_v<br/>(512 → 768)"]
+        TP["t_proj = W_t · t + b_t<br/>(768 → 768)"]
+        V2T["v2t MHA<br/>(visual attends to text)"]
+        T2V["t2v MHA<br/>(text attends to visual)"]
+        RL1["Residual + LayerNorm"]
+        RL2["Residual + LayerNorm"]
+        CAT["Concatenate<br/>[v_out ; t_out] ∈ ℝ^1536"]
+        PROJ["Linear Projection<br/>(1536 → 512)"]
+        V --> VP --> V2T --> RL1 --> CAT
+        TE --> TP --> T2V --> RL2 --> CAT
+        CAT --> PROJ
+    end
+
+    subgraph Shared["Shared Representation"]
+        SFC["Shared FC<br/>(512 → 512, GELU, Dropout 0.4)"]
+        PROJ --> SFC
+    end
+
+    subgraph Heads["Nine Attribute Heads"]
+        H1["theme (9 cls)"]
+        H2["sentiment (3 cls)"]
+        H3["emotion (5 cls)"]
+        H4["dominant_colour (10 cls)"]
+        H5["attention_score (3 cls)"]
+        H6["trust_safety (3 cls)"]
+        H7["target_audience (6 cls)"]
+        H8["predicted_ctr (3 cls)"]
+        H9["likelihood_shares (3 cls)"]
+        SFC --> H1 & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9
+    end

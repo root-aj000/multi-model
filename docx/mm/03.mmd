@@ -1,0 +1,28 @@
+flowchart TD
+    subgraph Input["Input Stage"]
+        IMG["Raw Image<br/>PIL Image (H×W×3)"]
+        TXT["Ad Copy<br/>string (or OCR-extracted)"]
+    end
+
+    subgraph Preprocess["Preprocessing"]
+        IP["Image Preprocessing<br/>Resize 224×224 → Tensor<br/>ImageNet Normalisation<br/>+ Augmentation (train)"]
+        TP["Text Preprocessing<br/>clean_text → tokenise<br/>max_length=256<br/>→ input_ids, attention_mask"]
+    end
+
+    subgraph Encoders["Encoder Stage"]
+        VE["VisualModule<br/>ResNet-18 → GAP<br/>v ∈ ℝ^512"]
+        TE["TextModule<br/>DistilBERT → Attn-Weighted Pool<br/>t ∈ ℝ^768"]
+    end
+
+    subgraph Fusion["Cross-Modal Fusion"]
+        CMA["CrossModalAttention<br/>v_proj, t_proj → ℝ^768<br/>Bidirectional MHA (8 heads)<br/>Residual + LayerNorm<br/>Concat → Linear → m ∈ ℝ^512"]
+    end
+
+    subgraph Heads["Attribute Heads"]
+        SH["Shared FC<br/>GELU + Dropout(0.4)<br/>s ∈ ℝ^512"]
+        AH["9× Attribute Heads<br/>Linear(512, d_head) → GELU<br/>→ Dropout → Linear(d_head, C_k)<br/>→ Softmax → ŷ_k"]
+    end
+
+    IMG --> IP --> VE --> CMA
+    TXT --> TP --> TE --> CMA
+    CMA --> SH --> AH
