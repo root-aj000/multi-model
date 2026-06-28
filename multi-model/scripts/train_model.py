@@ -108,8 +108,8 @@ def main() -> None:
     parser.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=5,
-        help="Stop training if validation accuracy does not improve for this many epochs",
+        default=None,
+        help="Stop training if validation accuracy does not improve for this many epochs (overrides config)",
     )
     parser.add_argument(
         "--log-dir",
@@ -147,7 +147,7 @@ def main() -> None:
     # text_max_length must match the value in config so fallback tensors
     # in train_epoch/validate_epoch have the correct sequence length.
     text_max_length = config.get("text_max_length", 256)
-    early_stopping_patience = args.early_stopping_patience
+    early_stopping_patience = args.early_stopping_patience or config.get("early_stopping_patience", 10)
     epochs_without_improvement = 0
     best_val_accuracy = -1.0
 
