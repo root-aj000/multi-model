@@ -257,15 +257,9 @@ def plot_confusion_matrices(
 
         fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 4*rows))
         if n_attrs == 1:
-            axes = [[axes]]
-        elif rows == 1:
-            axes = [axes]
+            axes_flat = [axes]
         else:
-            axes = [axes[i] if isinstance(axes[i], np.ndarray) else [axes[i]]
-                   for i in range(rows)]
-            axes = [item for sublist in axes for item in (sublist if isinstance(sublist, list) else [sublist])]
-
-        axes_flat = axes if isinstance(axes, list) else axes.flatten()
+            axes_flat = axes.flatten().tolist()
 
         fig.suptitle("Confusion Matrices per Attribute", fontsize=16, fontweight="bold")
 
