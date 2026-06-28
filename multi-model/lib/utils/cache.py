@@ -1,12 +1,17 @@
 import os
+import logging
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from lib.utils.config import _PROJECT_ROOT
+
+logger = logging.getLogger(__name__)
+
 
 def get_model_cache_directory() -> Path:
     """Return the directory for cached visual models."""
-    return Path("local/models")
+    return _PROJECT_ROOT / "local" / "models"
 
 
 def list_cached_models() -> List[str]:
@@ -22,9 +27,13 @@ def get_cache_size() -> float:
     cache_dir = get_model_cache_directory()
     if not cache_dir.exists():
         return 0.0
-    total_size = sum(
-        f.stat().st_size for f in cache_dir.rglob("*") if f.is_file()
-    )
+    total_size = 0.0
+    for f in cache_dir.rglob("*"):
+        if f.is_file():
+            try:
+                total_size += f.stat().st_size
+            except OSError:
+                continue
     return total_size / (1024 * 1024)
 
 
@@ -34,13 +43,17 @@ def clear_model_cache(confirm: bool = False) -> bool:
         return False
     cache_dir = get_model_cache_directory()
     if cache_dir.exists():
-        shutil.rmtree(cache_dir)
+        try:
+            shutil.rmtree(cache_dir)
+        except OSError as exc:
+            logger.warning("Failed to clear model cache at %s: %s", cache_dir, exc)
+            return False
     return True
 
 
 def get_text_model_cache_directory() -> Path:
     """Return the directory for cached text models."""
-    return Path("local/tokenizer")
+    return _PROJECT_ROOT / "local" / "tokenizer"
 
 
 def list_cached_text_models() -> List[str]:
@@ -56,9 +69,13 @@ def get_text_cache_size() -> float:
     cache_dir = get_text_model_cache_directory()
     if not cache_dir.exists():
         return 0.0
-    total_size = sum(
-        f.stat().st_size for f in cache_dir.rglob("*") if f.is_file()
-    )
+    total_size = 0.0
+    for f in cache_dir.rglob("*"):
+        if f.is_file():
+            try:
+                total_size += f.stat().st_size
+            except OSError:
+                continue
     return total_size / (1024 * 1024)
 
 
@@ -68,7 +85,11 @@ def clear_text_model_cache(confirm: bool = False) -> bool:
         return False
     cache_dir = get_text_model_cache_directory()
     if cache_dir.exists():
-        shutil.rmtree(cache_dir)
+        try:
+            shutil.rmtree(cache_dir)
+        except OSError as exc:
+            logger.warning("Failed to clear text model cache at %s: %s", cache_dir, exc)
+            return False
     return True
 
 
@@ -153,9 +174,9 @@ class CacheManager:
         self.cache_dirs = cache_dirs
 
     def info(self) -> Dict[str, Any]:
-        """Return information about all managed caches."""
+        """Return information about all managed caches (sizes in MB)."""
         return {
-            name: get_dir_size(path)
+            name: get_dir_size(path) / (1024 * 1024)
             for name, path in self.cache_dirs.items()
             if path.exists()
         }

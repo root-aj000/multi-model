@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
@@ -96,6 +97,16 @@ class CustomDataset(Dataset):
             if col in self.label_maps
         ]
 
+        # Precompute label→index mappings for O(1) lookup instead of O(n) .index()
+        self._label_indices: Dict[str, Dict[str, int]] = {}
+        for col in self.label_columns:
+            self._label_indices[col] = {
+                label: idx for idx, label in enumerate(self.label_maps[col])
+            }
+
+        # Cache whether text column exists
+        self._has_text_column = "text" in self.data.columns
+
         logger.info(
             "Loaded dataset from %s with %d samples. Label columns: %s",
             csv_path, len(self.data), self.label_columns,
@@ -124,8 +135,6 @@ class CustomDataset(Dataset):
             FileNotFoundError: If the image file does not exist on disk.
             ValueError: If a label value is not found in its label map.
         """
-        import torch
-
         row = self.data.iloc[idx]
         image_path = self.image_dir / row[IMAGE_FILENAME_COLUMN]
 
@@ -134,21 +143,21 @@ class CustomDataset(Dataset):
         if self.image_pipeline is not None:
             image = self.image_pipeline(image)
 
-        # Encode string labels to integer indices using label_maps
+        # Encode string labels to integer indices using precomputed mappings
         label_dict: Dict[str, torch.Tensor] = {}
         for col in self.label_columns:
             raw_value = row[col]
-            label_list = self.label_maps[col]
-            if raw_value not in label_list:
+            label_index_map = self._label_indices[col]
+            if raw_value not in label_index_map:
                 raise ValueError(
                     f"Label value '{raw_value}' for attribute '{col}' not found "
-                    f"in label map. Valid values: {label_list}"
+                    f"in label map. Valid values: {list(label_index_map.keys())}"
                 )
             label_dict[col] = torch.tensor(
-                label_list.index(raw_value), dtype=torch.long
+                label_index_map[raw_value], dtype=torch.long
             )
 
-        if self.text_pipeline is not None and "text" in self.data.columns:
+        if self.text_pipeline is not None and self._has_text_column:
             raw_text = str(row["text"]) if pd.notna(row["text"]) else ""
             text_features = self.text_pipeline(raw_text)
             return (

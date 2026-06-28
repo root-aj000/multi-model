@@ -40,6 +40,12 @@ class TrainingLogger:
             self._initialize_csv_file(metrics_dict)
         self._append_to_csv(metrics_dict, epoch)
 
+    def __enter__(self) -> "TrainingLogger":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def _validate_metrics_input(self, metrics: Dict[str, Any]) -> None:
         """Validate that metrics input is a valid dictionary."""
         if not isinstance(metrics, dict):
@@ -95,9 +101,16 @@ def create_logger(name: str, level: int, log_dir: Optional[str] = None) -> loggi
     if log_dir:
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_path / f"{name}.log")
-        file_handler.setFormatter(logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        ))
-        logger.addHandler(file_handler)
+        log_file = log_path / f"{name}.log"
+        # Avoid duplicate file handlers for the same log file
+        has_file_handler = any(
+            isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file.resolve())
+            for h in logger.handlers
+        )
+        if not has_file_handler:
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            ))
+            logger.addHandler(file_handler)
     return logger

@@ -14,6 +14,7 @@ Modified to support:
 
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Set
@@ -214,12 +215,6 @@ def root() -> Dict[str, Any]:
     }
 
 
-@app.get("/health", tags=["meta"])
-def health() -> Dict[str, str]:
-    """Lightweight liveness probe."""
-    return {"status": "ok"}
-
-
 # ---------------------------------------------------------------------------
 # HTTP boundary helpers
 # ---------------------------------------------------------------------------
@@ -262,14 +257,25 @@ def save_upload_file(upload_file: UploadFile, dest_folder: Path) -> str:
     dest_folder.mkdir(parents=True, exist_ok=True)
     # Sanitize filename to prevent path traversal attacks
     safe_filename = Path(upload_file.filename).name
-    dest_path = dest_folder / safe_filename
+    # Append UUID to prevent filename collisions
+    stem = Path(safe_filename).stem
+    suffix = Path(safe_filename).suffix
+    unique_filename = f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
+    dest_path = dest_folder / unique_filename
 
-    file_content = upload_file.file.read()
-    if len(file_content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size is {MAX_FILE_SIZE} bytes.",
-        )
+    # Read in chunks to check size before loading entire file into memory
+    file_content = bytearray()
+    chunk_size = 64 * 1024  # 64KB chunks
+    while True:
+        chunk = upload_file.file.read(chunk_size)
+        if not chunk:
+            break
+        file_content.extend(chunk)
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE} bytes.",
+            )
 
     with open(dest_path, "wb") as buffer:
         buffer.write(file_content)
@@ -280,7 +286,7 @@ def save_upload_file(upload_file: UploadFile, dest_folder: Path) -> str:
 # ---------------------------------------------------------------------------
 # Route definitions
 # ---------------------------------------------------------------------------
-@app.get("/health")
+@app.get("/health", tags=["meta"])
 def health_check() -> Dict[str, str]:
     """
     Health check endpoint.

@@ -332,6 +332,11 @@ class TextModule(nn.Module):
     def get_cache_info(self) -> Dict[str, Any]:
         info: Dict[str, Any] = {"encoder_name": self.encoder_name}
         cache_dir = Path("local/tokenizer") / self.encoder_name
+        try:
+            from lib.utils.cache import get_text_model_cache_directory
+            cache_dir = get_text_model_cache_directory() / self.encoder_name
+        except Exception:
+            pass
         if cache_dir.exists():
             info["cache_dir"] = str(cache_dir)
         return info

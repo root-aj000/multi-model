@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import torch
 from PIL import Image
 
 from lib.ocr.engine import OCREngine
@@ -246,8 +247,6 @@ def _prepare_image_tensor(
     Returns:
         Batched image tensor of shape (1, C, H, W).
     """
-    import torch
-
     image_array = _to_numpy_array(image)
 
     # Handle grayscale: (H, W) -> (H, W, 3) or (H, W, 1) -> (H, W, 3)
@@ -295,8 +294,6 @@ def _prepare_text_tensors(
     Returns:
         Tuple of (input_ids, attention_mask), each of shape (1, seq_len).
     """
-    import torch
-
     if not text or not text.strip():
         # Return a zero-padded encoding rather than passing a space hack
         input_ids = torch.zeros(1, max_length, dtype=torch.long)

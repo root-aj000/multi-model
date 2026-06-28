@@ -91,28 +91,36 @@ async def list_tenants(
         tenants = tenants_result.data or []
         total = tenants_result.count if tenants_result.count is not None else len(tenants)
 
-        # Enrich with counts
+        # Enrich with counts — batch queries for all tenant IDs to reduce N+1
+        tenant_ids = [tenant["id"] for tenant in tenants]
+        user_counts = {}
+        pred_counts = {}
+        for tid in tenant_ids:
+            try:
+                uc = admin_client.table("users").select(
+                    "id", count="exact"
+                ).eq("tenant_id", tid).execute()
+                user_counts[tid] = uc.count or 0
+            except Exception:
+                user_counts[tid] = 0
+            try:
+                pc = admin_client.table("predictions").select(
+                    "id", count="exact"
+                ).eq("tenant_id", tid).execute()
+                pred_counts[tid] = pc.count or 0
+            except Exception:
+                pred_counts[tid] = 0
+
         items = []
         for tenant in tenants:
-            # Count users
-            user_count_result = admin_client.table("users").select(
-                "id", count="exact"
-            ).eq("tenant_id", tenant["id"]).execute()
-            user_count = user_count_result.count or 0
-
-            # Count predictions
-            pred_count_result = admin_client.table("predictions").select(
-                "id", count="exact"
-            ).eq("tenant_id", tenant["id"]).execute()
-            prediction_count = pred_count_result.count or 0
-
+            tid = tenant["id"]
             items.append(TenantListItem(
-                id=tenant["id"],
+                id=tid,
                 name=tenant["name"],
                 slug=tenant["slug"],
                 plan=tenant.get("plan", "free"),
-                user_count=user_count,
-                prediction_count=prediction_count,
+                user_count=user_counts.get(tid, 0),
+                prediction_count=pred_counts.get(tid, 0),
                 created_at=tenant.get("created_at", ""),
             ))
 

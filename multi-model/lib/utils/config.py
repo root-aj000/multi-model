@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Project root is three levels up from this file:
 #   lib/utils/config.py  →  lib/utils/  →  lib/  →  project root
-# _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_PROJECT_ROOT = Path(__file__).resolve().parents[4] 
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -88,16 +87,6 @@ def load_config(config_path: str) -> Dict[str, Any]:
 #     }
 
 
-import os
-import logging
-from pathlib import Path
-from typing import Dict, Optional
-
-logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]  # adjust depth as needed
-
-# print(f"DEBUG: Resolved project root: {_PROJECT_ROOT}")
 def get_dataset_paths(split: str, dataset_root: Optional[str] = None) -> Dict[str, Path]:
     """
     Get file paths for a dataset split, anchored to the project root or a

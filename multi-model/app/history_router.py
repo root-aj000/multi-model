@@ -101,10 +101,12 @@ async def list_predictions(
     if attribute and value:
         query = query.contains("result", {attribute: value})
 
-    # Text search
+    # Text search — sanitize to prevent PostgREST injection
     if search:
+        # Escape special PostgREST characters: % and ,
+        safe_search = search.replace("%", "\\%").replace(",", "\\,")
         query = query.or_(
-            f"filename.ilike.%{search}%,ocr_text.ilike.%{search}%"
+            f"filename.ilike.%{safe_search}%,ocr_text.ilike.%{safe_search}%"
         )
 
     # Order by newest first

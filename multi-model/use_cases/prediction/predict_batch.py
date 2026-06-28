@@ -65,7 +65,13 @@ def predict_batch(
                 predictor=predictor,  # BUG-27 FIX: pass shared predictor
             )
             results.append(result)
-        except Exception as err:  # BUG-19 FIX: catch all exceptions
+        except MemoryError as err:
+            logger.error(
+                "Out of memory processing image at index %d: %s",
+                idx, err,
+            )
+            raise  # Re-raise MemoryError to let caller handle OOM
+        except Exception as err:  # BUG-19 FIX: catch all non-OOM exceptions
             logger.error(
                 "Prediction failed for image at index %d (%s): %s",
                 idx, type(err).__name__, err,

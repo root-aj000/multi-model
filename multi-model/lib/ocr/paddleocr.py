@@ -88,12 +88,18 @@ class PaddleOCREngine(OCREngine):
 
         result = self.ocr.ocr(image, cls=True)
 
-        if not result or not result[0]:
+        if not result or not result[0] or not isinstance(result[0], list):
             logger.debug("No text detected in image")
             return "", 0.0
 
-        texts = [line[1][0] for line in result[0]]
-        confidences = [line[1][1] for line in result[0]]
+        texts = []
+        confidences = []
+        for line in result[0]:
+            if isinstance(line, (list, tuple)) and len(line) >= 2:
+                text_info = line[1]
+                if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
+                    texts.append(str(text_info[0]))
+                    confidences.append(float(text_info[1]))
 
         average_confidence = (
             sum(confidences) / len(confidences) if confidences else 0.0
@@ -133,7 +139,11 @@ class PaddleOCREngine(OCREngine):
             return False
 
         if self.model_dir.exists():
-            shutil.rmtree(self.model_dir)
-            logger.info("Cleared PaddleOCR model cache at: %s", self.model_dir)
+            try:
+                shutil.rmtree(self.model_dir)
+                logger.info("Cleared PaddleOCR model cache at: %s", self.model_dir)
+            except OSError as exc:
+                logger.warning("Failed to clear PaddleOCR cache at %s: %s", self.model_dir, exc)
+                return False
         self.ocr = None
         return True

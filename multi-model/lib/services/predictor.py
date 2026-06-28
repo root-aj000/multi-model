@@ -73,8 +73,6 @@ class Predictor:
             Dictionary mapping attribute names to their predicted label
             strings, plus confidence scores and numeric class indices.
         """
-        self.model.eval()
-
         with torch.no_grad():
             raw_outputs = self.model(images, input_ids, attention_mask)
 
@@ -119,8 +117,6 @@ class Predictor:
         Returns:
             List of prediction dictionaries, one per sample.
         """
-        self.model.eval()
-
         with torch.no_grad():
             raw_outputs = self.model(images, input_ids, attention_mask)
 

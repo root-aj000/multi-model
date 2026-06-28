@@ -148,7 +148,11 @@ class EasyOCREngine(OCREngine):
             return False
 
         if self.model_dir.exists():
-            shutil.rmtree(self.model_dir)
-            logger.info("Cleared EasyOCR model cache at: %s", self.model_dir)
+            try:
+                shutil.rmtree(self.model_dir)
+                logger.info("Cleared EasyOCR model cache at: %s", self.model_dir)
+            except OSError as exc:
+                logger.warning("Failed to clear EasyOCR cache at %s: %s", self.model_dir, exc)
+                return False
         self.reader = None
         return True

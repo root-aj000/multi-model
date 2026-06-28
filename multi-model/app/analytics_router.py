@@ -91,30 +91,37 @@ async def get_analytics_summary(
         )
 
     try:
-        # Get all predictions for the tenant (for aggregation)
+        # Get predictions count for the tenant
+        count_result = admin_client.table("predictions").select(
+            "id", count="exact"
+        ).eq("tenant_id", ctx.tenant_id).execute()
+
+        total = count_result.count or 0
+
+        # Get this month's count using server-side filter
+        from datetime import datetime, timezone
+        month_start = datetime.now(timezone.utc).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+        month_result = admin_client.table("predictions").select(
+            "id", count="exact"
+        ).eq("tenant_id", ctx.tenant_id).gte("created_at", month_start).execute()
+        this_month = month_result.count or 0
+
+        # Get this week's count
+        from datetime import timedelta
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        week_result = admin_client.table("predictions").select(
+            "id", count="exact"
+        ).eq("tenant_id", ctx.tenant_id).gte("created_at", week_ago).execute()
+        this_week = week_result.count or 0
+
+        # Get recent predictions for aggregation (limit to prevent OOM)
         result = admin_client.table("predictions").select(
-            "result, processing_ms, created_at"
-        ).eq("tenant_id", ctx.tenant_id).order("created_at", desc=True).execute()
+            "result, processing_ms"
+        ).eq("tenant_id", ctx.tenant_id).order("created_at", desc=True).limit(1000).execute()
 
         predictions = result.data or []
-
-        # Total count
-        total = len(predictions)
-
-        # This month count
-        now_str = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m")
-        this_month = sum(
-            1 for p in predictions
-            if p.get("created_at", "").startswith(now_str)
-        )
-
-        # This week count (last 7 days)
-        from datetime import datetime, timedelta, timezone
-        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        this_week = sum(
-            1 for p in predictions
-            if p.get("created_at", "") >= week_ago
-        )
 
         # Average processing time
         processing_times = [

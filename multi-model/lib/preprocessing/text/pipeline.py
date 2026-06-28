@@ -123,7 +123,7 @@ def build_text_pipeline(
     Returns:
         A callable that processes raw text into tokenized output.
     """
-    def pipeline(text: str, max_length: int = 512) -> dict:
+    def pipeline(text: str, max_length: int = 256) -> dict:
         cleaned = cleaner(text)
         return tokenizer(cleaned, max_length)
 

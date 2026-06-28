@@ -314,7 +314,6 @@ async def test_api_key(
         )
 
         start = time.monotonic()
-        # Simulate a quick API call
         status_code = 200 if is_valid else 401
         elapsed_ms = int((time.monotonic() - start) * 1000)
 

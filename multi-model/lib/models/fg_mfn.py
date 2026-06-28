@@ -136,7 +136,6 @@ class CrossModalAttention(nn.Module):
 
         self.attention_dim = attention_dim
         self.num_heads = num_heads
-        self.head_dim = attention_dim // num_heads
 
         # Project each modality to the shared attention space
         self.visual_proj = nn.Linear(visual_dim, attention_dim)
@@ -193,11 +192,11 @@ class CrossModalAttention(nn.Module):
         t = self.text_proj(text).unsqueeze(1)       # (B, 1, attention_dim)
 
         # Visual attends to text: query=v, key/value=t
-        v_attended, _ = self.v2t_attn(query=v, key=t, value=t)  # (B, 1, attention_dim)
+        v_attended, _ = self.v2t_attn(query=v, key=t, value=t, need_weights=False)  # (B, 1, attention_dim)
         v_attended = self.attn_dropout(v_attended)
 
         # Text attends to visual: query=t, key/value=v
-        t_attended, _ = self.t2v_attn(query=t, key=v, value=v)  # (B, 1, attention_dim)
+        t_attended, _ = self.t2v_attn(query=t, key=v, value=v, need_weights=False)  # (B, 1, attention_dim)
         t_attended = self.attn_dropout(t_attended)
 
         # Residual + LayerNorm

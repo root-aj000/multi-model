@@ -139,8 +139,11 @@ def _check_quota(tenant_id: str) -> Dict[str, Any]:
 
     except Exception as exc:
         logger.warning("Quota check failed for tenant %s: %s", tenant_id, exc)
-        # Fail open — allow the request if quota check fails
-        return {"used": 0, "limit": 999999, "remaining": 999999, "reset_seconds": 0}
+        # Fail closed — deny request if quota check fails
+        raise HTTPException(
+            status_code=500,
+            detail="Quota check failed. Please try again.",
+        )
 
 
 def _save_prediction(
@@ -256,13 +259,13 @@ async def predict_endpoint(
                 predictor=_predictor,
             )
             results.append(result)
-        except RuntimeError as prediction_error:
+        except (RuntimeError, ValueError, FileNotFoundError, IOError) as prediction_error:
             logger.error(
                 "Prediction failed for file '%s': %s",
                 upload_file.filename, prediction_error,
             )
             raise HTTPException(
-                status_code=500,
+                status_code=400,
                 detail=f"Prediction failed: {prediction_error}",
             ) from prediction_error
 

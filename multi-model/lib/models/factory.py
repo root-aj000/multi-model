@@ -125,7 +125,9 @@ def load_model(
     except TypeError as load_error:
         # Older PyTorch versions don't support weights_only=True
         logger.warning(
-            "weights_only=True failed for '%s', retrying without it: %s",
+            "weights_only=True failed for '%s', retrying without it: %s. "
+            "WARNING: weights_only=False allows pickle deserialization which "
+            "can execute arbitrary code. Only load trusted checkpoints.",
             checkpoint_path, load_error,
         )
         checkpoint = torch.load(
@@ -139,9 +141,19 @@ def load_model(
     try:
         model.load_state_dict(checkpoint)
     except RuntimeError as state_error:
-        raise RuntimeError(
-            f"Checkpoint state_dict does not match model architecture: {state_error}"
-        ) from state_error
+        # Try stripping "module." prefix (DataParallel saved checkpoint)
+        stripped = {
+            k.removeprefix("module."): v for k, v in checkpoint.items()
+        }
+        try:
+            model.load_state_dict(stripped)
+            logger.info(
+                "Loaded checkpoint after stripping DataParallel 'module.' prefix"
+            )
+        except RuntimeError:
+            raise RuntimeError(
+                f"Checkpoint state_dict does not match model architecture: {state_error}"
+            ) from state_error
 
     # BUG-11 FIX: always return in eval mode for inference
     model.eval()

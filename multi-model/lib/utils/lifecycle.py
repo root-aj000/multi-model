@@ -1,7 +1,10 @@
+import logging
 import os
 import shutil
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def setup_directories(dirs: Optional[List[Path]] = None) -> None:
@@ -32,8 +35,13 @@ def cleanup_upload_directory(upload_dir: Path) -> None:
     """
     if not upload_dir.exists():
         return
+    resolved_root = upload_dir.resolve()
     for item in upload_dir.iterdir():
         if item.is_file():
             item.unlink()
         elif item.is_dir():
-            shutil.rmtree(item)
+            # Prevent symlink traversal outside upload_dir
+            if item.resolve().is_relative_to(resolved_root):
+                shutil.rmtree(item)
+            else:
+                logger.warning("Skipping symlink to outside upload dir: %s", item)

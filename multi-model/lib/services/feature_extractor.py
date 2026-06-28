@@ -94,8 +94,11 @@ class FeatureExtractor:
             text_features = self.text_module(input_ids, attention_mask)
         else:
             logger.warning("No text extracted from image; using zero features")
-            device = next(self.text_module.parameters()).device
-            text_features = torch.zeros(1, self.text_module.hidden_size, device=device)
+            try:
+                device = next(self.text_module.parameters()).device
+            except StopIteration:
+                device = torch.device("cpu")
+            text_features = torch.zeros(1, self.text_module.out_features, device=device)
 
         return {
             "visual_features": visual_features,

@@ -8,7 +8,6 @@ Augmentation is always applied BEFORE normalization so that color/brightness
 operations work on raw [0, 255] uint8 pixel values.
 """
 
-import colorsys
 import random
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -93,16 +92,47 @@ def _hue_shift(pil_image: Image.Image, hue_factor: float) -> Image.Image:
         PIL Image with hue rotated.
     """
     arr = np.array(pil_image, dtype=np.float32) / 255.0  # (H, W, 3) in [0,1]
-    h, w, _ = arr.shape
-    flat = arr.reshape(-1, 3)
 
-    shifted = np.empty_like(flat)
-    for i, (r, g, b) in enumerate(flat):
-        hue, sat, val = colorsys.rgb_to_hsv(r, g, b)
-        hue = (hue + hue_factor) % 1.0
-        shifted[i] = colorsys.hsv_to_rgb(hue, sat, val)
+    # Vectorized RGB→HSV conversion using numpy operations
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    max_c = np.max(arr, axis=-1)
+    min_c = np.min(arr, axis=-1)
+    diff = max_c - min_c
 
-    result = (shifted.reshape(h, w, 3) * 255.0).clip(0, 255).astype(np.uint8)
+    # Value
+    v = max_c
+
+    # Saturation
+    s = np.where(max_c == 0, 0.0, diff / max_c)
+
+    # Hue
+    h = np.zeros_like(v)
+    mask = diff > 0
+    r_mask = mask & (max_c == r)
+    g_mask = mask & (max_c == g)
+    b_mask = mask & (max_c == b)
+    h[r_mask] = (((g[r_mask] - b[r_mask]) / diff[r_mask]) % 6) / 6.0
+    h[g_mask] = (((b[g_mask] - r[g_mask]) / diff[g_mask]) + 2) / 6.0
+    h[b_mask] = (((r[b_mask] - g[b_mask]) / diff[b_mask]) + 4) / 6.0
+
+    # Rotate hue
+    h = (h + hue_factor) % 1.0
+
+    # Vectorized HSV→RGB conversion
+    i = (h * 6.0).astype(int) % 6
+    f = h * 6.0 - i
+    p = v * (1 - s)
+    q = v * (1 - f * s)
+    t = v * (1 - (1 - f) * s)
+
+    r_out, g_out, b_out = np.zeros_like(v), np.zeros_like(v), np.zeros_like(v)
+    for k, (rv, gv, bv) in enumerate([(v, t, p), (q, v, p), (p, v, t),
+                                       (p, q, v), (t, p, v), (v, p, q)]):
+        m = i == k
+        r_out[m], g_out[m], b_out[m] = rv[m], gv[m], bv[m]
+
+    result = np.stack([r_out, g_out, b_out], axis=-1)
+    result = (result * 255.0).clip(0, 255).astype(np.uint8)
     return Image.fromarray(result)
 
 
