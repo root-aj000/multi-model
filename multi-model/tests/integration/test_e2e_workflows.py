@@ -51,7 +51,7 @@ class TestTrainingPipelineE2E:
         # Train for 2 epochs
         losses = []
         for epoch in range(2):
-            loss = train_epoch(
+            loss, acc, per_attr = train_epoch(
                 model,
                 data_loader,
                 criterion,
@@ -63,7 +63,7 @@ class TestTrainingPipelineE2E:
         
         # Validate
         model.eval()
-        val_loss, val_acc = validate_epoch(
+        val_loss, val_acc, val_per_attr = validate_epoch(
             model,
             data_loader,
             criterion,

@@ -224,7 +224,7 @@ class TestTrainingEpochAdvanced:
         
         losses = []
         for epoch in range(3):
-            epoch_loss, epoch_acc = train_epoch(
+            epoch_loss, epoch_acc, _ = train_epoch(
                 model,
                 data_loader,
                 criterion,
@@ -242,7 +242,7 @@ class TestTrainingEpochAdvanced:
         model, optimizer, criterion, data_loader = mock_training_setup
         model.train()
         
-        loss, acc = train_epoch(
+        loss, acc, _ = train_epoch(
             model,
             data_loader,
             criterion,
@@ -263,7 +263,7 @@ class TestTrainingEpochAdvanced:
         # Store initial weights
         initial_weights = [p.clone() for p in model.parameters()]
         
-        loss, acc = train_epoch(
+        loss, acc, _ = train_epoch(
             model,
             data_loader,
             criterion,
@@ -281,7 +281,7 @@ class TestTrainingEpochAdvanced:
         model, optimizer, criterion, data_loader = mock_training_setup
         model.train()
         
-        loss, acc = train_epoch(
+        loss, acc, _ = train_epoch(
             model,
             data_loader,
             criterion,
@@ -298,7 +298,7 @@ class TestTrainingEpochAdvanced:
         model, optimizer, criterion, data_loader = mock_training_setup
         model.train()
         
-        loss, acc = train_epoch(
+        loss, acc, _ = train_epoch(
             model,
             data_loader,
             criterion,
@@ -346,7 +346,7 @@ class TestValidateEpochAdvanced:
         model, criterion, data_loader = mock_validation_setup
         model.eval()
         
-        val_loss, val_acc = validate_epoch(
+        val_loss, val_acc, _ = validate_epoch(
             model,
             data_loader,
             criterion,
@@ -363,7 +363,7 @@ class TestValidateEpochAdvanced:
         model.train()
         
         with torch.no_grad():
-            val_loss, val_acc = validate_epoch(
+            val_loss, val_acc, _ = validate_epoch(
                 model,
                 data_loader,
                 criterion,
@@ -378,7 +378,7 @@ class TestValidateEpochAdvanced:
         model.eval()
         
         torch.manual_seed(42)
-        val_loss1, val_acc1 = validate_epoch(
+        val_loss1, val_acc1, _ = validate_epoch(
             model,
             data_loader,
             criterion,
@@ -386,7 +386,7 @@ class TestValidateEpochAdvanced:
         )
         
         torch.manual_seed(42)
-        val_loss2, val_acc2 = validate_epoch(
+        val_loss2, val_acc2, _ = validate_epoch(
             model,
             data_loader,
             criterion,

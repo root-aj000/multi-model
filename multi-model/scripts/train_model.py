@@ -150,12 +150,12 @@ def main() -> None:
     best_val_accuracy = -1.0
 
     for epoch in range(num_epochs):
-        train_loss, train_accuracy = train_epoch(
+        train_loss, train_accuracy, train_per_attr = train_epoch(
             model, train_loader, criterion, optimizer, device,
             mixup_alpha=mixup_alpha,
             text_max_length=text_max_length,
         )
-        val_loss, val_accuracy = validate_epoch(
+        val_loss, val_accuracy, val_per_attr = validate_epoch(
             model, val_loader, criterion, device,
             text_max_length=text_max_length,
         )
