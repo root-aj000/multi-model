@@ -1,7 +1,7 @@
 {
   "_comment_architecture": "=== MODEL ARCHITECTURE ===",
 
-  "IMAGE_BACKBONE": "resnet50",
+  "IMAGE_BACKBONE": "efficientnet_b0",
   "_comment_IMAGE_BACKBONE": [
     "Visual backbone. Options:",
     "  ResNet  : resnet18, resnet50",
@@ -134,7 +134,7 @@
 
   "_comment_image": "=== IMAGE PREPROCESSING ===",
 
-  "image_size": [224, 224],
+  "image_size": [512, 512],
   "_comment_image_size": [
     "Input image size as [width, height]. Must match what the backbone expects.",
     "Recommended sizes by backbone:",
@@ -193,7 +193,7 @@
     "BUG-02 FIX: no longer passed as a global AdamW arg (was redundant)."
   ],
 
-  "batch_size": 64,
+  "batch_size": 32,
   "_comment_batch_size": [
     "Training and validation batch size.",
     "With DataParallel (multi-GPU) each GPU processes batch_size/num_gpus samples.",
