@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 ATTRIBUTE_NAMES = [
     "theme", "sentiment", "emotion", "dominant_colour",
-    "attention_score", "trust_safety", "target_audience",
+    "attention_score", "trust_safety",
     "predicted_ctr", "likelihood_shares",
 ]
 

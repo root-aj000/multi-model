@@ -91,18 +91,18 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
-  "DROPOUT": 0.4,
-  "_comment_DROPOUT": "Raised from 0.4 → 0.5. Trust_safety gap=0.32, target_audience gap=0.30 at ep28 indicate the heads need stronger dropout to stop memorising.",
+  "DROPOUT": 0.5,
+  "_comment_DROPOUT": "Raised from 0.4 → 0.5. Train/val loss gap growing (+0.68 at ep9) indicates overfitting. Stronger dropout regularises all 8 heads.",
 
-  "FREEZE_BACKBONE": false,
+  "FREEZE_BACKBONE": true,
   "_comment_FREEZE_BACKBONE": [
     "Freeze the pretrained visual backbone convolutional weights.",
-    "Set to true: with 4860 training samples and a 25M-param ResNet-50,",
-    "the backbone was memorising training images (train/val gap on trust_safety=0.32,",
-    "target_audience=0.30 by epoch 28). Freezing forces the model to use general",
-    "ImageNet features which generalise far better on small datasets.",
+    "With 4860 training samples and ResNet-18 (11M params),",
+    "the backbone memorises training images (val loss plateaued at ep5).",
+    "Freezing forces the model to use general ImageNet features which",
+    "generalise far better on small datasets.",
     "The cross-modal attention, shared FC, and all heads remain fully trainable.",
-    "BUG-23 FIX: previously froze the head too, preventing it from training."
+    "Expected impact: -5% train accuracy, +3-5% val accuracy, smaller train/val gap."
   ],
 
   "DEEP_SHARED_LAYER": true,
@@ -117,18 +117,17 @@
     "sentiment": 1.5,
     "emotion": 1.5,
     "dominant_colour": 1.0,
-    "attention_score": 0.1,
+    "attention_score": 0.05,
     "trust_safety": 1.5,
-    "target_audience": 1.2,
-    "predicted_ctr": 0.1,
-    "likelihood_shares": 0.1
+    "predicted_ctr": 0.05,
+    "likelihood_shares": 0.05
   },
   "_comment_ATTRIBUTE_LOSS_WEIGHTS": [
     "Per-attribute multiplier applied to each head's CrossEntropyLoss before summing.",
     "attention_score/predicted_ctr/likelihood_shares are engagement metrics that cannot",
-    "be learned from image+text content (confirmed by Cramér's V ≈ 0.02–0.04).",
-    "Reducing them to 0.1 (from 0.3) almost silences their gradient noise,",
-    "letting the semantic heads (sentiment, emotion, trust_safety) dominate.",
+    "be learned from image+text content (Cramér's V ≈ 0.02–0.04).",
+    "Reduced from 0.1 → 0.05 to further silence gradient noise from these heads,",
+    "letting the semantic heads (sentiment, emotion, trust_safety) dominate training.",
     "Used by train_epoch in train_model.py — see ATTRIBUTE_LOSS_WEIGHTS key."
   ],
 
@@ -175,8 +174,8 @@
     "BUG-28 NOTE: setup_training_components reads from the top-level config."
   ],
 
-  "learning_rate": 2e-4,
-  "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC). Reduced from 3e-4 → 2e-4: backbone is now frozen so fewer params need large LR.",
+  "learning_rate": 1e-4,
+  "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC). Reduced from 2e-4 → 1e-4: slower learning reduces overfitting on small dataset.",
 
   "encoder_learning_rate": 1.5e-5,
   "_comment_encoder_learning_rate": [
@@ -185,10 +184,10 @@
     "Raised from 5e-6 → 2e-5: the encoder was barely fine-tuning at 5e-6."
   ],
 
-  "weight_decay": 0.01,
+  "weight_decay": 0.02,
   "_comment_weight_decay": [
     "L2 regularisation applied to non-bias, non-LayerNorm parameters.",
-    "Raised from 1e-3 → 5e-3 to combat overfitting on small dataset (4860 samples).",
+    "Raised from 0.01 → 0.02: stronger regularisation to close the train/val gap.",
     "Bias and LayerNorm weights always have weight_decay=0 (standard BERT recipe).",
     "BUG-02 FIX: no longer passed as a global AdamW arg (was redundant)."
   ],
@@ -233,12 +232,11 @@
     "Standard image augmentation (already configured) is sufficient."
   ],
 
-  "label_smoothing": 0.2,
+  "label_smoothing": 0.25,
   "_comment_label_smoothing": [
-    "Raised from 0.1 → 0.15. The severe train/val gaps on trust_safety (0.32) and",
-    "target_audience (0.30) mean the model is grossly overconfident on training labels.",
-    "0.15 smoothing redistributes 15% of probability mass uniformly, preventing peaks.",
-    "Typical values: 0.05–0.15. Higher = stronger regularisation."
+    "Raised from 0.2 → 0.25. Val loss plateaued since ep5 while train loss kept dropping.",
+    "0.25 smoothing redistributes 25% of probability mass uniformly, preventing overconfident predictions.",
+    "Typical values: 0.05–0.25. Higher = stronger regularisation."
   ],
 
   "early_stopping_patience": 10,
@@ -398,10 +396,6 @@
     "trust_safety": {
       "num_classes": 3,
       "labels": ["Questionable", "Safe", "Unsafe"]
-    },
-    "target_audience": {
-      "num_classes": 6,
-      "labels": ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"]
     },
     "predicted_ctr": {
       "num_classes": 3,
