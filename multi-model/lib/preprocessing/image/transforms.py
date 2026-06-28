@@ -102,8 +102,9 @@ def _hue_shift(pil_image: Image.Image, hue_factor: float) -> Image.Image:
     # Value
     v = max_c
 
-    # Saturation
-    s = np.where(max_c == 0, 0.0, diff / max_c)
+    # Saturation — use np.divide with where= to avoid divide-by-zero warning
+    s = np.zeros_like(v)
+    np.divide(diff, max_c, out=s, where=(max_c != 0))
 
     # Hue
     h = np.zeros_like(v)
