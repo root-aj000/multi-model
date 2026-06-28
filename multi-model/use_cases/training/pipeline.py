@@ -372,6 +372,10 @@ def setup_training_components(
         cfg.get("weight_decay", 1e-2),
         scheduler_type, warmup_epochs, mixup_alpha,
     )
+
+    stop_gradient_heads = set(cfg.get("STOP_GRADIENT_HEADS", []))
+    if stop_gradient_heads:
+        logger.info("Stop-gradient heads: %s", sorted(stop_gradient_heads))
     return {
         "optimizer": optimizer,
         "criterion": criterion,
@@ -464,4 +468,5 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
         "val_loader": val_loader,
         **components,
         "attribute_loss_weights": config.get("ATTRIBUTE_LOSS_WEIGHTS", {}),
+        "stop_gradient_heads": set(config.get("STOP_GRADIENT_HEADS", [])),
     }

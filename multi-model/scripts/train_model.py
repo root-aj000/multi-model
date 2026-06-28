@@ -135,6 +135,8 @@ def main() -> None:
     optimizer = pipeline["optimizer"]
     criterion = pipeline["criterion"]
     scheduler = pipeline.get("scheduler")
+    attribute_loss_weights = pipeline.get("attribute_loss_weights", {})
+    stop_gradient_heads = pipeline.get("stop_gradient_heads", set())
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -154,6 +156,8 @@ def main() -> None:
             model, train_loader, criterion, optimizer, device,
             mixup_alpha=mixup_alpha,
             text_max_length=text_max_length,
+            attribute_loss_weights=attribute_loss_weights,
+            stop_gradient_heads=stop_gradient_heads,
         )
         val_loss, val_accuracy, val_per_attr = validate_epoch(
             model, val_loader, criterion, device,

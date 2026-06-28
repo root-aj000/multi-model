@@ -131,6 +131,17 @@
     "Used by train_epoch in train_model.py — see ATTRIBUTE_LOSS_WEIGHTS key."
   ],
 
+  "STOP_GRADIENT_HEADS": ["predicted_ctr", "likelihood_shares"],
+  "_comment_STOP_GRADIENT_HEADS": [
+    "Attribute heads whose gradients are detached from the shared representation.",
+    "These heads still compute forward pass (for monitoring) and their own weights",
+    "receive gradients, but their loss does NOT flow back into shared_fc or fusion.",
+    "This prevents noisy engagement metrics from corrupting the shared features that",
+    "semantic heads (sentiment, emotion, trust_safety) depend on.",
+    "predicted_ctr and likelihood_shares have Cramér's V ≈ 0.02 with content —",
+    "they are essentially random noise and their gradients harm generalisation."
+  ],
+
   "_comment_image": "=== IMAGE PREPROCESSING ===",
 
   "image_size": [512, 512],

@@ -169,6 +169,7 @@ def train_epoch(
     mixup_alpha: float = DEFAULT_MIXUP_ALPHA,
     text_max_length: int = 256,
     attribute_loss_weights: Optional[Dict[str, float]] = None,
+    stop_gradient_heads: Optional[set] = None,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one training epoch.
@@ -187,6 +188,10 @@ def train_epoch(
                          summing. Downweight noisy heads (predicted_ctr,
                          likelihood_shares, attention_score) to prevent their
                          gradients from corrupting the shared representation.
+        stop_gradient_heads: Optional set of attribute names whose gradients
+                         are detached from shared features. The heads still
+                         compute forward pass and train their own weights,
+                         but do not corrupt the shared representation.
 
     Returns:
         (average_loss, accuracy) for the epoch.
@@ -222,7 +227,7 @@ def train_epoch(
             lam = 1.0
 
         optimizer.zero_grad()
-        outputs = model(inputs, input_ids, attention_mask)
+        outputs = model(inputs, input_ids, attention_mask, stop_gradient_heads=stop_gradient_heads)
 
         if isinstance(outputs, dict) and isinstance(labels_a, dict):
             loss = sum(

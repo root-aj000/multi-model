@@ -396,12 +396,17 @@ class FG_MFN(nn.Module):
         images: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        stop_gradient_heads: Optional[set] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
             images:         (B, C, H, W)
             input_ids:      (B, seq_len)
             attention_mask: (B, seq_len)
+            stop_gradient_heads: Optional set of attribute names whose gradients
+                should NOT flow back into shared features. The heads still compute
+                forward pass and their own weights receive gradients, but the
+                shared representation is not corrupted by their noisy labels.
 
         Returns:
             Dict[attr_name → (B, num_classes) logit tensor]
@@ -419,7 +424,13 @@ class FG_MFN(nn.Module):
         shared = self.shared_fc(fused)  # (B, hidden_dim)
 
         # Per-attribute classification
-        return {name: head(shared) for name, head in self.attribute_heads.items()}
+        results = {}
+        for name, head in self.attribute_heads.items():
+            if stop_gradient_heads and name in stop_gradient_heads:
+                results[name] = head(shared.detach())
+            else:
+                results[name] = head(shared)
+        return results
 
     def _fuse(self, visual: torch.Tensor, text: torch.Tensor) -> torch.Tensor:
         """
