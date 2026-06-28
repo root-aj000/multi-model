@@ -131,7 +131,7 @@
     "Used by train_epoch in train_model.py — see ATTRIBUTE_LOSS_WEIGHTS key."
   ],
 
-  "STOP_GRADIENT_HEADS": ["predicted_ctr", "likelihood_shares"],
+  "STOP_GRADIENT_HEADS": [],
   "_comment_STOP_GRADIENT_HEADS": [
     "Attribute heads whose gradients are detached from the shared representation.",
     "These heads still compute forward pass (for monitoring) and their own weights",
