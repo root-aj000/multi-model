@@ -667,7 +667,7 @@ class FG_MFN(nn.Module):
 
         # Noisy attributes use a separate low-capacity branch
         if self.noisy_attrs:
-            noisy_h = self.noisy_branch(shared.detach())
+            noisy_h = self.noisy_branch(shared)
             for name in self.noisy_attrs:
                 if name in self.attribute_heads:
                     results[name] = self.attribute_heads[name](noisy_h)

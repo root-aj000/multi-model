@@ -93,10 +93,10 @@
 
   "USE_AUX_FEATURES": true,
 
-  "NOISY_ATTRIBUTES": ["attention_score", "predicted_ctr", "likelihood_shares"],
-  "_comment_NOISY_ATTRIBUTES": "These attributes use a separate low-capacity MLP branch (noisy_branch) that is detached from the main shared representation. This prevents their noisy gradients from corrupting the features used by semantic heads.",
+  "NOISY_ATTRIBUTES": ["attention_score", "predicted_ctr", "likelihood_shares", "target_audience"],
+  "_comment_NOISY_ATTRIBUTES": "These attributes use a separate low-capacity MLP branch (noisy_branch) that is detached from the main shared representation. This prevents their noisy gradients from corrupting the features used by semantic heads. target_audience added — 28% train accuracy on a 6-class task indicates near-random labels, so it gets the same noisy-branch treatment.",
 
-  "NOISY_BRANCH_HIDDEN": 64,
+  "NOISY_BRANCH_HIDDEN": 128,
   "_comment_NOISY_BRANCH_HIDDEN": "Hidden dimension of the noisy attribute MLP branch. Smaller than HIDDEN_DIM (512) to limit capacity and prevent overfitting to noise.",
 
   "USE_GRAPH_HEADS": true,
@@ -296,16 +296,29 @@
     "Standard image augmentation (already configured) is sufficient."
   ],
 
-  "FOCAL_LOSS_GAMMA": {
-    "attention_score": 2.0,
-    "predicted_ctr": 2.0,
-    "likelihood_shares": 2.0,
-    "target_audience": 1.5
-  },
+  "FOCAL_LOSS_GAMMA": {},
   "_comment_FOCAL_LOSS_GAMMA": [
     "Per-attribute gamma for Focal Loss. gamma=0 disables focal loss (uses standard CE).",
-    "gamma=2.0 down-weights easy examples — helps with imbalanced/noisy attributes.",
+    "All 4 noisy attrs migrated to GCELoss (below) because GCE is bounded — prevents",
+    "individual very-wrong samples from dominating the gradient.",
     "Set to a float to apply the same gamma to all attributes, or a dict for per-attr control."
+  ],
+
+  "GCE_Q": {
+    "attention_score": 0.5,
+    "predicted_ctr": 0.7,
+    "likelihood_shares": 0.7,
+    "target_audience": 0.5
+  },
+  "_comment_GCE_Q": [
+    "Per-attribute q for Generalized Cross Entropy Loss.",
+    "GCE is bounded: max loss = 1/q (e.g. q=0.5 → max loss = 2.0).",
+    "Lower q = stronger noise robustness. q=0.0 = standard CE.",
+    "Replaced FocalLoss for noisy attrs because GCE's bounded nature",
+    "provides stronger protection against individual noisy labels without",
+    "the easy-example down-weighting that can hurt already-weak signal.",
+    "attention_score and target_audience get q=0.5 (stronger robustness),",
+    "predicted_ctr and likelihood_shares get q=0.7 (milder)."
   ],
 
   "label_smoothing": {
@@ -313,18 +326,19 @@
     "sentiment": 0.1,
     "emotion": 0.1,
     "dominant_colour": 0.05,
-    "attention_score": 0.3,
+    "attention_score": 0.1,
     "trust_safety": 0.1,
-    "predicted_ctr": 0.3,
-    "likelihood_shares": 0.3,
-    "target_audience": 0.2
+    "predicted_ctr": 0.1,
+    "likelihood_shares": 0.1,
+    "target_audience": 0.1
   },
   "_comment_label_smoothing": [
     "Per-attribute label smoothing. Can be a float (uniform) or a dict (per-attribute).",
-    "Higher smoothing (0.2-0.3) for noisy/imbalanced attributes prevents overfitting to noise.",
-    "Lower smoothing (0.05) for well-learned attributes lets them assign more probability mass",
-    "to the correct class.",
-    "Global default was 0.1 before per-attribute support."
+    "Reduced all noisy attrs from 0.3 → 0.1: aggressive smoothing was producing",
+    "targets like [0.233, 0.233, 0.533] for 3-class problems — too much noise for",
+    "the model to extract any signal. 0.1 gives [0.033, 0.033, 0.933] which still",
+    "provides regularisation without obliterating the weak signal.",
+    "Lower smoothing (0.05) for well-learned attributes."
   ],
 
   "USE_TTA": true,
@@ -333,14 +347,14 @@
   "ELR_BETA": 0.7,
   "_comment_ELR_BETA": "Beta coefficient for Early Learning Regularization. Controls EMA momentum for per-target tracking. Typical range: 0.3–0.9.",
 
-  "USE_COTEACHING": false,
+  "USE_COTEACHING": true,
   "_comment_USE_COTEACHING": "If true, use Co-teaching (two models, small-loss sample exchange). Requires USE_COTEACHING=true and two optimizer configs.",
 
   "COTEACHING_NOISE_RATE": 0.2,
   "_comment_COTEACHING_NOISE_RATE": "Estimated label noise rate for Co-teaching. Determines what fraction of samples with the largest losses are discarded each batch.",
 
-  "USE_DIVIDEMIX": false,
-  "_comment_USE_DIVIDEMIX": "If true, use DivideMix (GMM-based clean/noisy split + co-training). Overrides USE_COTEACHING if both are true.",
+  "USE_DIVIDEMIX": true,
+  "_comment_USE_DIVIDEMIX": "DivideMix: GMM-based clean/noisy split + co-training for sample-level noise robustness. Overrides USE_COTEACHING. The 4 noisy engagement attrs have near-random labels — DivideMix lets the model identify which training samples have reliable labels per-attribute and trains on them differently.",
 
   "DIVIDEMIX_WARMUP_EPOCHS": 10,
   "_comment_DIVIDEMIX_WARMUP_EPOCHS": "Number of warmup epochs where DivideMix trains on the full dataset before applying GMM splitting.",

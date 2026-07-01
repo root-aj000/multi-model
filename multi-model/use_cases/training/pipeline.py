@@ -531,11 +531,24 @@ def setup_training_components(
     stop_gradient_heads = set(cfg.get("STOP_GRADIENT_HEADS", []))
     if stop_gradient_heads:
         logger.info("Stop-gradient heads: %s", sorted(stop_gradient_heads))
+
+    # Build loss truncation thresholds for noisy attributes.
+    # Prevents individual samples with extremely wrong labels from
+    # producing unbounded gradients.  Threshold 3.0 is loose enough
+    # to not interfere with normal learning but tight enough to cap
+    # worst-case CE losses (which can exceed 15 for completely wrong
+    # predictions on e.g. 9-class tasks).
+    noisy_attrs_trunc = cfg.get("NOISY_ATTRIBUTES", [])
+    loss_truncation = {attr: 3.0 for attr in noisy_attrs_trunc} if noisy_attrs_trunc else None
+    if loss_truncation:
+        logger.info("Loss truncation enabled: %s", loss_truncation)
+
     return {
         "optimizer": optimizer,
         "criterion": criterion,
         "scheduler": scheduler,
         "mixup_alpha": mixup_alpha,
+        "loss_truncation": loss_truncation,
     }
 
 
@@ -797,4 +810,5 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
         "elr": elr,
         "optimizer2": optimizer2,
         "divide_mix": divide_mix,
+        "loss_truncation": components.get("loss_truncation"),
     }

@@ -238,6 +238,7 @@ def main() -> None:
     accuracy_attributes = pipeline.get("accuracy_attributes", None)
     elr = pipeline.get("elr")
     divide_mix = pipeline.get("divide_mix")
+    loss_truncation = pipeline.get("loss_truncation")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -268,6 +269,7 @@ def main() -> None:
                 attribute_loss_weights=attribute_loss_weights,
                 stop_gradient_heads=stop_gradient_heads,
                 accuracy_attributes=accuracy_attributes,
+                loss_truncation=loss_truncation,
                 verbose=True,
             )
             # Use model1 for validation
@@ -289,6 +291,7 @@ def main() -> None:
                 attribute_loss_weights=attribute_loss_weights,
                 stop_gradient_heads=stop_gradient_heads,
                 accuracy_attributes=accuracy_attributes,
+                loss_truncation=loss_truncation,
             )
             # Use model1 for validation
             val_loss, val_accuracy, val_per_attr = validate_epoch(
@@ -307,6 +310,7 @@ def main() -> None:
                 stop_gradient_heads=stop_gradient_heads,
                 accuracy_attributes=accuracy_attributes,
                 elr=elr,
+                loss_truncation=loss_truncation,
             )
             val_loss, val_accuracy, val_per_attr = validate_epoch(
                 model, val_loader, criterion, device,

@@ -17,6 +17,8 @@ from typing import Optional
 import torch
 from torch.utils.data import DataLoader
 
+from lib.utils.losses import FocalLoss, GCELoss
+
 logger = logging.getLogger(__name__)
 
 # Default Mixup alpha parameter for Beta distribution
@@ -244,6 +246,43 @@ def _compute_per_attribute_accuracy(
     return per_attr
 
 
+def _compute_per_sample_loss_attr(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    criterion_obj: Any,
+) -> torch.Tensor:
+    """
+    Compute per-sample loss for a single attribute, respecting the
+    criterion type.  Used by loss truncation below.
+    """
+    if isinstance(criterion_obj, torch.nn.CrossEntropyLoss):
+        return F.cross_entropy(
+            logits, targets,
+            weight=criterion_obj.weight,
+            label_smoothing=getattr(criterion_obj, 'label_smoothing', 0.0),
+            reduction='none',
+        )
+    if isinstance(criterion_obj, FocalLoss):
+        ce = F.cross_entropy(
+            logits, targets,
+            weight=criterion_obj.weight,
+            label_smoothing=criterion_obj.label_smoothing,
+            reduction='none',
+        )
+        return ((1 - (-ce).exp()) ** criterion_obj.gamma) * ce
+    if isinstance(criterion_obj, GCELoss):
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+        one_hot = F.one_hot(targets, num_classes=logits.size(-1))
+        p_t = (probs * one_hot).sum(dim=-1)
+        loss = (1.0 - p_t ** criterion_obj.q) / criterion_obj.q
+        if criterion_obj.weight is not None:
+            class_weights = (one_hot * criterion_obj.weight.unsqueeze(0)).sum(dim=-1)
+            loss = loss * class_weights
+        return loss
+    return F.cross_entropy(logits, targets, reduction='none')
+
+
 def _compute_loss(
     outputs: Any,
     labels_a: Any,
@@ -251,28 +290,36 @@ def _compute_loss(
     lam: float,
     criterion: Any,
     attribute_loss_weights: Optional[Dict[str, float]] = None,
+    loss_truncation: Optional[Dict[str, float]] = None,
 ) -> torch.Tensor:
     if isinstance(outputs, dict) and isinstance(labels_a, dict):
-        return sum(
-            (attribute_loss_weights or {}).get(attr, 1.0) *
-            mixup_criterion(
-                _get_criterion(criterion, attr),
-                outputs[attr],
-                labels_a[attr],
-                labels_b[attr],
-                lam,
-            )
-            for attr in outputs if attr in labels_a
-        )
+        total = torch.tensor(0.0, device=next(iter(labels_a.values())).device)
+        for attr in outputs:
+            if attr not in labels_a:
+                continue
+            weight = (attribute_loss_weights or {}).get(attr, 1.0)
+            attr_crit = _get_criterion(criterion, attr)
+            if loss_truncation is not None and attr in loss_truncation:
+                per_sample = _compute_per_sample_loss_attr(outputs[attr], labels_a[attr], attr_crit)
+                per_sample = per_sample.clamp(max=loss_truncation[attr])
+                loss = per_sample.mean()
+            else:
+                loss = mixup_criterion(attr_crit, outputs[attr], labels_a[attr], labels_b[attr], lam)
+            total = total + weight * loss
+        return total
     elif isinstance(outputs, dict):
-        return sum(
-            (attribute_loss_weights or {}).get(attr, 1.0) *
-            mixup_criterion(
-                _get_criterion(criterion, attr),
-                logits, labels_a, labels_b, lam,
-            )
-            for attr, logits in outputs.items()
-        )
+        total = torch.tensor(0.0, device=labels_a.device if isinstance(labels_a, torch.Tensor) else next(iter(labels_a.values())).device)
+        for attr, logits in outputs.items():
+            weight = (attribute_loss_weights or {}).get(attr, 1.0)
+            attr_crit = _get_criterion(criterion, attr)
+            if loss_truncation is not None and attr in loss_truncation:
+                per_sample = _compute_per_sample_loss_attr(logits, labels_a, attr_crit)
+                per_sample = per_sample.clamp(max=loss_truncation[attr])
+                loss = per_sample.mean()
+            else:
+                loss = mixup_criterion(attr_crit, logits, labels_a, labels_b, lam)
+            total = total + weight * loss
+        return total
     return mixup_criterion(
         _get_criterion(criterion, ""), outputs, labels_a, labels_b, lam,
     )
@@ -291,6 +338,7 @@ def train_epoch(
     stop_gradient_heads: Optional[set] = None,
     accuracy_attributes: Optional[set] = None,
     elr: Optional[ELRRegularizer] = None,
+    loss_truncation: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one training epoch.
@@ -315,6 +363,9 @@ def train_epoch(
         elr:                  Optional ELRRegularizer for Early Learning
                               Regularization. If provided, the batch is
                               expected to include sample indices (last element).
+        loss_truncation:      Optional dict mapping attribute name to a
+                              per-sample loss cap. Prevents individual noisy
+                              samples from dominating the gradient.
 
     Returns:
         (average_loss, accuracy) for the epoch.
@@ -363,7 +414,7 @@ def train_epoch(
         # ── SAM first step ──────────────────────────────────────────────
         optimizer.zero_grad()
         outputs = model(inputs, input_ids, attention_mask, aux_features=aux_features, stop_gradient_heads=stop_gradient_heads)
-        loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights)
+        loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
         # Add ELR regularization if enabled
         if elr is not None and indices is not None:
             loss = loss + elr(outputs, indices, epoch)
@@ -374,7 +425,7 @@ def train_epoch(
             optimizer.first_step(zero_grad=True)
             # Second forward pass at perturbed weights
             outputs = model(inputs, input_ids, attention_mask, aux_features=aux_features, stop_gradient_heads=stop_gradient_heads)
-            loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights)
+            loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
             if elr is not None and indices is not None:
                 loss = loss + elr(outputs, indices, epoch)
             loss.backward()
@@ -580,6 +631,7 @@ def train_epoch_coteaching(
     attribute_loss_weights: Optional[Dict[str, float]] = None,
     stop_gradient_heads: Optional[set] = None,
     accuracy_attributes: Optional[set] = None,
+    loss_truncation: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Co-teaching training epoch (Han et al. NeurIPS 2018).
@@ -688,7 +740,7 @@ def train_epoch_coteaching(
         # ── Update model1 using model2's selected samples ──
         optimizer1.zero_grad()
         out1_slice = slice_outputs(outputs1, idx2)
-        loss1 = _compute_loss(out1_slice, labels_a_slice, labels_b_slice, lam, criterion, attribute_loss_weights)
+        loss1 = _compute_loss(out1_slice, labels_a_slice, labels_b_slice, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
         loss1.backward()
         if has_sam1:
             optimizer1.first_step(zero_grad=True)
@@ -698,7 +750,7 @@ def train_epoch_coteaching(
                                   aux_features=aux_features[idx2] if aux_features is not None else None,
                                   stop_gradient_heads=stop_gradient_heads)
             loss1_sam = _compute_loss(slice_outputs(outputs1_sam, torch.arange(idx2.size(0), device=device)),
-                                      labels_a_slice, labels_b_slice, lam, criterion, attribute_loss_weights)
+                                      labels_a_slice, labels_b_slice, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
             loss1_sam.backward()
             optimizer1.second_step(zero_grad=True)
         else:
@@ -708,7 +760,7 @@ def train_epoch_coteaching(
         # ── Update model2 using model1's selected samples ──
         optimizer2.zero_grad()
         out2_slice = slice_outputs(outputs2, idx1)
-        loss2 = _compute_loss(out2_slice, labels_a_slice_1, labels_b_slice_1, lam, criterion, attribute_loss_weights)
+        loss2 = _compute_loss(out2_slice, labels_a_slice_1, labels_b_slice_1, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
         loss2.backward()
         if has_sam2:
             optimizer2.first_step(zero_grad=True)
@@ -717,7 +769,7 @@ def train_epoch_coteaching(
                                   aux_features=aux_features[idx1] if aux_features is not None else None,
                                   stop_gradient_heads=stop_gradient_heads)
             loss2_sam = _compute_loss(slice_outputs(outputs2_sam, torch.arange(idx1.size(0), device=device)),
-                                      labels_a_slice_1, labels_b_slice_1, lam, criterion, attribute_loss_weights)
+                                      labels_a_slice_1, labels_b_slice_1, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
             loss2_sam.backward()
             optimizer2.second_step(zero_grad=True)
         else:
@@ -875,6 +927,7 @@ class DivideMix:
         attribute_loss_weights: Optional[Dict[str, float]] = None,
         stop_gradient_heads: Optional[set] = None,
         accuracy_attributes: Optional[set] = None,
+        loss_truncation: Optional[Dict[str, float]] = None,
         verbose: bool = False,
     ) -> Tuple[float, float, Dict[str, float]]:
         """
@@ -934,8 +987,8 @@ class DivideMix:
                 out2 = model2(inputs, input_ids, attention_mask, aux_features=aux_features,
                               stop_gradient_heads=stop_gradient_heads)
 
-                loss1 = _compute_loss(out1, labels, labels, 1.0, criterion, attribute_loss_weights)
-                loss2 = _compute_loss(out2, labels, labels, 1.0, criterion, attribute_loss_weights)
+                loss1 = _compute_loss(out1, labels, labels, 1.0, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+                loss2 = _compute_loss(out2, labels, labels, 1.0, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
 
                 optimizer1.zero_grad()
                 loss1.backward()
@@ -1011,12 +1064,12 @@ class DivideMix:
                 out1_clean = {k: v[clean_mask1] for k, v in out1.items()}
                 labels_clean = {k: v[clean_mask1] for k, v in labels.items()}
                 loss_sup1 = _compute_loss(out1_clean, labels_clean, labels_clean, 1.0,
-                                          criterion, attribute_loss_weights)
+                                          criterion, attribute_loss_weights, loss_truncation=loss_truncation)
             if clean_mask2.any():
                 out2_clean = {k: v[clean_mask2] for k, v in out2.items()}
                 labels_clean2 = {k: v[clean_mask2] for k, v in labels.items()}
                 loss_sup2 = _compute_loss(out2_clean, labels_clean2, labels_clean2, 1.0,
-                                          criterion, attribute_loss_weights)
+                                          criterion, attribute_loss_weights, loss_truncation=loss_truncation)
 
             # ── Consistency loss on noisy samples ──
             # Model1: minimise cross-entropy against Model2's prediction (soft pseudo-label)
