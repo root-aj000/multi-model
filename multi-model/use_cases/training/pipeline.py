@@ -29,6 +29,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, LinearLR, Sequen
 from torch.utils.data import DataLoader
 
 from lib.models.factory import create_model
+from lib.models.fg_mfn import ATTRIBUTE_NAMES
 from lib.preprocessing.dataset import CustomDataset, load_dataset
 from lib.preprocessing.image.transforms import DEFAULT_IMAGE_SIZE, build_image_transform
 from lib.preprocessing.text.cleaner import clean_text, clean_adcopy
@@ -534,17 +535,12 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
     # training CSV and inject it into model_cfg so the GNN can use it as an
     # attention bias. This is done before model creation.
     if model_cfg.get("USE_GRAPH_HEADS", False):
-        label_maps_for_cooc = get_label_maps(config)
         dataset_root_cooc = config.get("DATASET_ROOT") or config.get("dataset_root")
         train_paths_cooc = get_dataset_paths("train", dataset_root_cooc)
         train_csv_cooc = train_paths_cooc["csv"]
         attr_names_cooc = [
-            n for n in [
-                "theme", "sentiment", "emotion", "dominant_colour",
-                "attention_score", "trust_safety",
-                "predicted_ctr", "likelihood_shares",
-            ]
-            if n in label_maps_for_cooc
+            n for n in ATTRIBUTE_NAMES
+            if n in model_cfg.get("ATTRIBUTES", {})
         ]
         logger.info(
             "USE_GRAPH_HEADS enabled — computing co-occurrence prior from %s",
