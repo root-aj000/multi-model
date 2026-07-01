@@ -91,7 +91,7 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
-  "USE_GRAPH_HEADS": false,
+  "USE_GRAPH_HEADS": true,
   "_comment_USE_GRAPH_HEADS": [
     "If true, replaces independent per-attribute heads with an",
     "AttributeCooccurrenceGraph — a GNN over attribute nodes that",
