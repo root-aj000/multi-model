@@ -601,13 +601,7 @@ def _compute_per_sample_loss(
             continue
         attr_crit = _get_criterion(criterion, attr_name)
         weight = (attribute_loss_weights or {}).get(attr_name, 1.0)
-        # CrossEntropyLoss reduction='none' gives per-sample loss
-        if isinstance(attr_crit, torch.nn.CrossEntropyLoss):
-            ce = torch.nn.functional.cross_entropy(logits, labels[attr_name], reduction='none')
-        else:
-            ce = attr_crit(logits, labels[attr_name])
-            if ce.dim() == 0:
-                ce = ce.expand_as(per_sample)
+        ce = _compute_per_sample_loss_attr(logits, labels[attr_name], attr_crit)
         per_sample = per_sample + weight * ce
     return per_sample
 
