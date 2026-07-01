@@ -362,8 +362,8 @@
   "DIVIDEMIX_CLEAN_THRESHOLD": 0.5,
   "_comment_DIVIDEMIX_CLEAN_THRESHOLD": "GMM probability threshold for clean/noisy split in DivideMix.",
 
-  "DIVIDEMIX_LAMBDA_U": 25.0,
-  "_comment_DIVIDEMIX_LAMBDA_U": "Weight for unsupervised (noisy sample) loss in DivideMix.",
+  "DIVIDEMIX_LAMBDA_U": 1.0,
+  "_comment_DIVIDEMIX_LAMBDA_U": "Weight for unsupervised (noisy sample) loss in DivideMix. Reduced from 25.0 → 1.0: original DivideMix designed for single-label CIFAR, but with 9 attributes the consistency CE sums to ~10-18 per sample — 25x gave 250-450 loss, overwhelming supervised signal.",
 
   "early_stopping_patience": 10,
   "_comment_early_stopping_patience": [
