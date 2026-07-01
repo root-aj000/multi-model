@@ -8,6 +8,7 @@ saves the best model checkpoint.
 
 import argparse
 import logging
+import math
 import os
 import re
 from collections import deque
@@ -16,14 +17,21 @@ from typing import Dict, List, Tuple
 
 import torch
 
+from lib.models.factory import create_model
 from lib.utils.config import load_config
 from lib.utils.logging import TrainingLogger
 from lib.utils.metrics_viz import generate_all_training_visualizations
-from use_cases.training.pipeline import build_training_pipeline
+from lib.utils.confident_learning import ConfidentLearning
+from lib.preprocessing.text.back_translate import build_text_augmenter
+from use_cases.training.pipeline import build_training_pipeline, setup_training_components
 from use_cases.training.train_model import (
     train_epoch,
     train_epoch_coteaching,
     validate_epoch,
+    L2RW,
+    MetaWeightNet,
+    MetaWeightNetTrainer,
+    MultiModelCoTrain,
 )
 
 logger = logging.getLogger(__name__)
@@ -244,6 +252,150 @@ def main() -> None:
 
     num_epochs = args.epochs or config.get("epochs", DEFAULT_EPOCHS)
 
+    # ── SimCLR self-supervised pre-training ──────────────────────────────
+    if config.get("SIMCLR_PRETRAIN", False):
+        logger.info("SimCLR pre-training enabled — running before supervised training.")
+        from lib.ssl.simclr import SimCLR as SimCLRModel
+        unwrapped = model.module if hasattr(model, 'module') else model
+        simclr_backbone = getattr(unwrapped, 'visual_module', None)
+        if simclr_backbone is None:
+            logger.warning("Cannot extract visual backbone for SimCLR — skipping pretraining.")
+        else:
+            simclr_cfg = config.get("SIMCLR_CONFIG", {})
+            simclr_model = SimCLRModel(simclr_backbone,
+                                        projection_dim=simclr_cfg.get("projection_dim", 128),
+                                        temperature=simclr_cfg.get("temperature", 0.5))
+            simclr_model.to(device)
+
+            class _LARS(torch.optim.Optimizer):
+                def __init__(self, params, lr, weight_decay=1e-4, eta=0.001):
+                    super().__init__(params, dict(lr=lr, weight_decay=weight_decay, eta=eta))
+                @torch.no_grad()
+                def step(self, closure=None):
+                    loss = None if closure is None else closure()
+                    for g in self.param_groups:
+                        lr, wd, eta = g['lr'], g['weight_decay'], g['eta']
+                        for p in g['params']:
+                            if p.grad is None: continue
+                            grad = p.grad.add(p, alpha=wd) if wd > 0 else p.grad
+                            trust = 1.0
+                            pn, gn = p.norm(), grad.norm()
+                            if pn > 0 and gn > 0:
+                                trust = eta * pn / (gn + 1e-8)
+                            p.add_(grad, alpha=-lr * trust)
+                    return loss
+
+            simclr_opt = _LARS(simclr_model.parameters(), lr=simclr_cfg.get("lr", 0.3))
+            simclr_bs = simclr_cfg.get("batch_size", 256)
+            simclr_ep = simclr_cfg.get("epochs", 200)
+            from torchvision import transforms as T
+            class _SimCLRTransform:
+                def __init__(self, size=224):
+                    self.t = T.Compose([
+                        T.RandomResizedCrop(size, scale=(0.08, 1.0)),
+                        T.RandomHorizontalFlip(p=0.5),
+                        T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+                        T.RandomGrayscale(p=0.2),
+                        T.ToTensor(),
+                        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                    ])
+                def __call__(self, x):
+                    return self.t(x), self.t(x)
+            from torchvision.datasets import ImageFolder
+            from torch.utils.data import DataLoader
+            dataset_root = config.get("DATASET_ROOT") or "dataset"
+            simclr_ds = ImageFolder(root=f"{dataset_root}/images/train", transform=_SimCLRTransform())
+            simclr_loader = DataLoader(simclr_ds, batch_size=simclr_bs, shuffle=True,
+                                        num_workers=min(8, os.cpu_count() or 4), pin_memory=True, drop_last=True)
+            for ep in range(simclr_ep):
+                warmup = 10
+                if ep < warmup:
+                    lr = simclr_cfg.get("lr", 0.3) * (ep + 1) / warmup
+                else:
+                    progress = (ep - warmup) / max(1, simclr_ep - warmup)
+                    lr = simclr_cfg.get("lr", 0.3) * 0.5 * (1.0 + math.cos(math.pi * progress))
+                for pg in simclr_opt.param_groups:
+                    pg['lr'] = lr
+                simclr_model.train()
+                total = 0.0
+                for images, _ in simclr_loader:
+                    x1, x2 = images
+                    x1, x2 = x1.to(device, non_blocking=True), x2.to(device, non_blocking=True)
+                    loss, _, _ = simclr_model(x1, x2)
+                    simclr_opt.zero_grad()
+                    loss.backward()
+                    simclr_opt.step()
+                    total += loss.item() * x1.size(0)
+                logger.info("SimCLR epoch %3d/%d: loss=%.4f lr=%.2e", ep + 1, simclr_ep, total / len(simclr_ds), lr)
+
+    # ── Multi-model co-training (N >= 3) ─────────────────────────────────
+    use_multico = use_dividemix and config.get("N_CO_TRAIN_MODELS", 2) > 2
+    n_models = config.get("N_CO_TRAIN_MODELS", 2) if use_multico else 2
+    multi_model_cotrain = None
+    if use_multico:
+        models_list = [model, model2]
+        optimizers_list = [optimizer, optimizer2]
+        for i in range(2, n_models):
+            m_i = create_model(config.get("model", config), device)
+            models_list.append(m_i)
+            comps_i = setup_training_components(m_i, config, device)
+            optimizers_list.append(comps_i["optimizer"])
+        num_classes_dict = {
+            name: attr_cfg["num_classes"]
+            for name, attr_cfg in config.get("ATTRIBUTES", {}).items()
+        }
+        multi_model_cotrain = MultiModelCoTrain(
+            n_samples=len(train_loader.dataset),
+            num_classes_dict=num_classes_dict,
+            device=device,
+            n_models=n_models,
+            warmup_epochs=config.get("DIVIDEMIX_WARMUP_EPOCHS", 10),
+            clean_threshold=config.get("DIVIDEMIX_CLEAN_THRESHOLD", 0.5),
+            lambda_u=config.get("DIVIDEMIX_LAMBDA_U", 1.0),
+            noise_rate=config.get("COTEACHING_NOISE_RATE", 0.2),
+            beta_elr=config.get("ELR_BETA", 0.7),
+            use_gmm=True,
+        )
+        # Use same loader for all models
+        loaders_tuple = tuple(train_loader for _ in range(n_models))
+        logger.info("MultiModelCoTrain enabled: %d models", n_models)
+
+    # ── Confidence Learning setup ────────────────────────────────────────
+    confident_learning = None
+    if config.get("USE_CONFIDENT_LEARNING", False):
+        num_classes_dict = {
+            name: attr_cfg["num_classes"]
+            for name, attr_cfg in config.get("ATTRIBUTES", {}).items()
+        }
+        confident_learning = ConfidentLearning(
+            num_classes_dict, threshold=config.get("CONFIDENT_LEARNING_THRESHOLD", "auto"),
+        )
+        logger.info("ConfidentLearning enabled: threshold=%s", confident_learning.threshold)
+
+    # ── L2RW / Meta-Weight-Net setup ────────────────────────────────────
+    l2rw = None
+    meta_weight_trainer = None
+    mwn = None
+    if config.get("USE_L2RW", False) and not use_dividemix:
+        l2rw = L2RW(val_loader, device, **config.get("L2RW_CONFIG", {}))
+        logger.info("L2RW enabled: meta_lr=%.4f", l2rw.meta_lr)
+    if config.get("USE_META_WEIGHT_NET", False) and not use_dividemix:
+        mwn = MetaWeightNet(**config.get("META_WEIGHT_NET_CONFIG", {}))
+        mwn.to(device)
+        meta_weight_trainer = MetaWeightNetTrainer(
+            mwn, val_loader, device,
+            meta_lr=config.get("META_WEIGHT_NET_CONFIG", {}).get("meta_lr", 1e-4),
+        )
+        logger.info("Meta-Weight-Net enabled: hidden=%d, max_weight=%.1f",
+                     mwn.net[0].out_features, mwn.max_weight)
+
+    # ── UDA text augmentation setup ──────────────────────────────────────
+    text_augmentor = None
+    if config.get("USE_UDA_TEXT_AUG", False) and config.get("use_text", False):
+        uda_cfg = config.get("UDA_TEXT_AUG_CONFIG", {})
+        text_augmentor = build_text_augmenter(**uda_cfg)
+        logger.info("UDA text augmentation enabled: method=%s", uda_cfg.get("method", "back_translate"))
+
     training_logger = TrainingLogger(args.log_dir)
     mixup_alpha = config.get("mixup_alpha", 0.0)
     # text_max_length must match the value in config so fallback tensors
@@ -260,7 +412,52 @@ def main() -> None:
     gap_history: List[Dict[str, float]] = []
 
     for epoch in range(num_epochs):
-        if use_dividemix:
+        # ── Confidence Learning pre-epoch analysis ─────────────────────
+        if confident_learning is not None and epoch >= 1:
+            with torch.no_grad():
+                model.eval()
+                all_probs: Dict[str, List[torch.Tensor]] = {}
+                all_labels: Dict[str, List[torch.Tensor]] = {}
+                for batch in val_loader:
+                    inputs_v = batch[0].to(device)
+                    labels_v = batch[1]
+                    if isinstance(labels_v, dict):
+                        pass
+                    else:
+                        labels_v = {k: v.to(device) for k, v in labels_v.items()} if isinstance(batch[1], dict) else {}
+                    input_ids_v = batch[2].to(device) if len(batch) >= 4 else None
+                    attn_v = batch[3].to(device) if len(batch) >= 4 else None
+                    aux_v = batch[4].to(device) if len(batch) >= 5 else None
+                    out_v = model(inputs_v, input_ids_v, attn_v, aux_features=aux_v)
+                    for attr, logits in out_v.items():
+                        all_probs.setdefault(attr, []).append(torch.softmax(logits, dim=-1))
+                        if isinstance(batch[1], dict) and attr in batch[1]:
+                            all_labels.setdefault(attr, []).append(batch[1][attr].to(device))
+                stacked_probs = {a: torch.cat(v, dim=0) for a, v in all_probs.items()}
+                stacked_labels = {a: torch.cat(v, dim=0) for a, v in all_labels.items()}
+                issues = confident_learning.find_label_issues(stacked_probs, stacked_labels)
+                logger.info("ConfidentLearning: %d potential label issues found in validation set", len(issues))
+
+        if multi_model_cotrain is not None:
+            train_loss, train_accuracy, train_per_attr = multi_model_cotrain.train_epoch(
+                tuple(models_list), loaders_tuple, tuple(optimizers_list),
+                criterion, device,
+                epoch=epoch + 1,
+                num_epochs=num_epochs,
+                text_max_length=text_max_length,
+                attribute_loss_weights=attribute_loss_weights,
+                stop_gradient_heads=stop_gradient_heads,
+                accuracy_attributes=accuracy_attributes,
+                loss_truncation=loss_truncation,
+                verbose=True,
+            )
+            val_loss, val_accuracy, val_per_attr = validate_epoch(
+                models_list[0], val_loader, criterion, device,
+                text_max_length=text_max_length,
+                accuracy_attributes=accuracy_attributes,
+                use_tta=pipeline.get("use_tta", False),
+            )
+        elif use_dividemix:
             train_loss, train_accuracy, train_per_attr = divide_mix.train_epoch(
                 model, model2, train_loader, criterion,
                 optimizer, optimizer2, device,
@@ -311,6 +508,9 @@ def main() -> None:
                 accuracy_attributes=accuracy_attributes,
                 elr=elr,
                 loss_truncation=loss_truncation,
+                l2rw=l2rw,
+                meta_weight_trainer=meta_weight_trainer,
+                mwn=mwn,
             )
             val_loss, val_accuracy, val_per_attr = validate_epoch(
                 model, val_loader, criterion, device,

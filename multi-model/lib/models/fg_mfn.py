@@ -351,6 +351,118 @@ class AttributeCooccurrenceGraph(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Prototypical Head
+# ──────────────────────────────────────────────────────────────────────────────
+
+class PrototypicalHead(nn.Module):
+    """
+    Classification head using learned prototypes per class.
+
+    For each class, the head maintains ``n_prototypes_per_class`` prototype
+    vectors.  During the forward pass it computes cosine similarity between
+    the input feature and every prototype, takes the *max* similarity across
+    prototypes belonging to the same class, scales with a learnable
+    temperature, and returns log-softmaxed class scores.
+
+    This is especially useful for noisy attributes: the prototype vectors act
+    as denoising centres learned from the cleaner semantic signal.
+
+    Dimensions:
+        Input:  (B, in_dim)
+        Output: (B, n_classes)  – log-probabilities (log-softmax)
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        n_classes: int,
+        n_prototypes_per_class: int = 3,
+        normalize: bool = True,
+    ) -> None:
+        """
+        Args:
+            in_dim:                Input feature dimension.
+            n_classes:             Number of output classes.
+            n_prototypes_per_class: Prototype vectors per class (default 3).
+            normalize:             L2-normalise both prototypes and input
+                                   before computing cosine similarity.
+        """
+        super().__init__()
+        self.n_classes = n_classes
+        self.n_prototypes_per_class = n_prototypes_per_class
+        self.n_prototypes = n_classes * n_prototypes_per_class
+        self.normalize = normalize
+
+        self.prototypes = nn.Parameter(
+            torch.randn(self.n_prototypes, in_dim) * 0.1
+        )
+        self.temperature = nn.Parameter(torch.tensor(10.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (B, in_dim) input features.
+
+        Returns:
+            (B, n_classes) log-probabilities (log-softmax).
+        """
+        if self.normalize:
+            x = F.normalize(x, dim=1)
+            prototypes = F.normalize(self.prototypes, dim=1)
+        else:
+            prototypes = self.prototypes
+
+        # Cosine similarity → (B, n_prototypes)
+        sim = F.linear(x, prototypes)
+
+        # Max over prototypes per class → (B, n_classes)
+        sim = sim.view(-1, self.n_classes, self.n_prototypes_per_class)
+        max_sim, _ = sim.max(dim=2)
+
+        return F.log_softmax(max_sim * self.temperature, dim=1)
+
+    def get_prototype_labels(self) -> torch.Tensor:
+        """
+        Returns a 1-D tensor of length ``n_classes * n_prototypes_per_class``
+        where each entry is the class index that the corresponding prototype
+        belongs to.
+        """
+        return torch.arange(self.n_classes).repeat_interleave(
+            self.n_prototypes_per_class
+        )
+
+
+class PrototypicalLoss(nn.Module):
+    """
+    Negative log-likelihood loss for prototypical-head outputs.
+
+    Since :class:`PrototypicalHead` already applies ``log_softmax``, this
+    wrapper uses :func:`~torch.nn.functional.nll_loss` directly.
+    """
+
+    def forward(
+        self,
+        prototype_logits: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """NLL loss on the log-softmax output of a PrototypicalHead."""
+        return F.nll_loss(prototype_logits, labels)
+
+    def forward_with_confidence(
+        self,
+        prototype_logits: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns ``(loss, confidence)`` where *confidence* is the maximum
+        softmax probability for each sample (averaged over the batch).
+        """
+        loss = F.nll_loss(prototype_logits, labels)
+        confidence = prototype_logits.exp().max(dim=1).values.mean()
+        return loss, confidence
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # FG_MFN
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -596,15 +708,38 @@ class FG_MFN(nn.Module):
             if not isinstance(num_classes, int) or num_classes <= 0:
                 logger.warning("Skipping '%s': invalid num_classes=%s", attr_name, num_classes)
                 continue
-            head_hidden = max(hidden_dim // 2, num_classes * 4)
-            self.attribute_heads[attr_name] = nn.Sequential(
-                nn.Linear(hidden_dim, head_hidden),
-                nn.GELU(),
-                nn.Dropout(dropout),
-                nn.Linear(head_hidden, num_classes),
-            )
+
+            head_type = attr_cfg.get("head_type", "linear")
+
+            if head_type == "prototypical":
+                n_proto = attr_cfg.get("n_prototypes_per_class", 3)
+                normalize = attr_cfg.get("normalize_prototypes", True)
+                self.attribute_heads[attr_name] = PrototypicalHead(
+                    in_dim=hidden_dim,
+                    n_classes=num_classes,
+                    n_prototypes_per_class=n_proto,
+                    normalize=normalize,
+                )
+                logger.info(
+                    "Head '%s': PrototypicalHead, %d prototypes/class, "
+                    "%d classes (normalize=%s)",
+                    attr_name, n_proto, num_classes, normalize,
+                )
+            else:
+                head_hidden = max(hidden_dim // 2, num_classes * 4)
+                self.attribute_heads[attr_name] = nn.Sequential(
+                    nn.Linear(hidden_dim, head_hidden),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(head_hidden, num_classes),
+                )
+                logger.info(
+                    "Head '%s': %d → %d → %d classes (dropout=%.2f)",
+                    attr_name, hidden_dim, head_hidden, num_classes, dropout,
+                )
+
             created += 1
-            logger.info("Head '%s': %d → %d → %d classes (dropout=%.2f)", attr_name, hidden_dim, head_hidden, num_classes, dropout)
+
         if created == 0 and attr_filter is None:
             raise ValueError("No attribute heads created. Check ATTRIBUTES in config.")
 
@@ -722,6 +857,20 @@ class FG_MFN(nn.Module):
             return None
         labels = self.cfg["ATTRIBUTES"].get(attr_name, {}).get("labels")
         return labels
+
+    def get_prototype_parameters(self) -> List[torch.nn.Parameter]:
+        """
+        Return all parameters belonging to :class:`PrototypicalHead` modules.
+
+        This is useful when prototypical heads should be optimised with a
+        different learning rate or a separate optimiser from the rest of the
+        model.
+        """
+        params: List[torch.nn.Parameter] = []
+        for head in self.attribute_heads.values():
+            if isinstance(head, PrototypicalHead):
+                params.extend(head.parameters())
+        return params
 
     def get_architecture_summary(self) -> Dict[str, Any]:
         """Return a human-readable summary of the model dimensions."""

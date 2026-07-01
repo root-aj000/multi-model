@@ -11,6 +11,8 @@ BUG-06 FIX: _compute_accuracy now returns (correct_count, total_count) so
             the previous macro-average-across-heads-and-batches metric.
 """
 
+from __future__ import annotations
+
 import copy
 import logging
 from typing import Any, Dict, Tuple
@@ -296,6 +298,7 @@ def _compute_loss(
     criterion: Any,
     attribute_loss_weights: Optional[Dict[str, float]] = None,
     loss_truncation: Optional[Dict[str, float]] = None,
+    sample_weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     if isinstance(outputs, dict) and isinstance(labels_a, dict):
         total = torch.tensor(0.0, device=next(iter(labels_a.values())).device)
@@ -304,7 +307,12 @@ def _compute_loss(
                 continue
             weight = (attribute_loss_weights or {}).get(attr, 1.0)
             attr_crit = _get_criterion(criterion, attr)
-            if loss_truncation is not None and attr in loss_truncation:
+            if sample_weights is not None:
+                per_sample = _compute_per_sample_loss_attr(outputs[attr], labels_a[attr], attr_crit)
+                if loss_truncation is not None and attr in loss_truncation:
+                    per_sample = per_sample.clamp(max=loss_truncation[attr])
+                loss = (per_sample * sample_weights).sum() / (sample_weights.sum() + 1e-8)
+            elif loss_truncation is not None and attr in loss_truncation:
                 per_sample = _compute_per_sample_loss_attr(outputs[attr], labels_a[attr], attr_crit)
                 per_sample = per_sample.clamp(max=loss_truncation[attr])
                 loss = per_sample.mean()
@@ -317,7 +325,12 @@ def _compute_loss(
         for attr, logits in outputs.items():
             weight = (attribute_loss_weights or {}).get(attr, 1.0)
             attr_crit = _get_criterion(criterion, attr)
-            if loss_truncation is not None and attr in loss_truncation:
+            if sample_weights is not None:
+                per_sample = _compute_per_sample_loss_attr(logits, labels_a, attr_crit)
+                if loss_truncation is not None and attr in loss_truncation:
+                    per_sample = per_sample.clamp(max=loss_truncation[attr])
+                loss = (per_sample * sample_weights).sum() / (sample_weights.sum() + 1e-8)
+            elif loss_truncation is not None and attr in loss_truncation:
                 per_sample = _compute_per_sample_loss_attr(logits, labels_a, attr_crit)
                 per_sample = per_sample.clamp(max=loss_truncation[attr])
                 loss = per_sample.mean()
@@ -344,6 +357,9 @@ def train_epoch(
     accuracy_attributes: Optional[set] = None,
     elr: Optional[ELRRegularizer] = None,
     loss_truncation: Optional[Dict[str, float]] = None,
+    l2rw: Optional[L2RW] = None,
+    meta_weight_trainer: Optional[MetaWeightNetTrainer] = None,
+    mwn: Optional[MetaWeightNet] = None,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one training epoch.
@@ -371,6 +387,12 @@ def train_epoch(
         loss_truncation:      Optional dict mapping attribute name to a
                               per-sample loss cap. Prevents individual noisy
                               samples from dominating the gradient.
+        l2rw:                 Optional L2RW instance for meta-learned sample
+                              reweighting. Requires indices in batch.
+        meta_weight_trainer:  Optional MetaWeightNetTrainer for bi-level
+                              meta-learned sample reweighting.
+        mwn:                  Optional MetaWeightNet instance (used when
+                              meta_weight_trainer computes weights).
 
     Returns:
         (average_loss, accuracy) for the epoch.
@@ -384,9 +406,11 @@ def train_epoch(
     per_attr_correct: Dict[str, int] = {}
     per_attr_total:   Dict[str, int] = {}
 
+    use_meta_weights = l2rw is not None or meta_weight_trainer is not None
+
     for batch in loader:
-        # Check if batch includes sample indices (last element, for ELR)
-        has_indices = elr is not None and isinstance(batch[-1], torch.Tensor) and batch[-1].dim() == 1
+        # Check if batch includes sample indices (last element, for ELR or meta-weights)
+        has_indices = (elr is not None or use_meta_weights) and isinstance(batch[-1], torch.Tensor) and batch[-1].dim() == 1
         indices = batch[-1].to(device) if has_indices else None
         # Strip indices from batch for standard unpacking
         if has_indices:
@@ -419,7 +443,16 @@ def train_epoch(
         # ── SAM first step ──────────────────────────────────────────────
         optimizer.zero_grad()
         outputs = model(inputs, input_ids, attention_mask, aux_features=aux_features, stop_gradient_heads=stop_gradient_heads)
-        loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+
+        # Compute sample weights via L2RW or Meta-Weight-Net if enabled
+        sample_weights = None
+        if l2rw is not None and indices is not None:
+            sample_weights = l2rw.compute_weights(model, outputs, labels_a, criterion, attribute_loss_weights)
+        elif meta_weight_trainer is not None and mwn is not None:
+            train_per = _compute_per_sample_loss(outputs, labels_a, criterion, attribute_loss_weights)
+            sample_weights = meta_weight_trainer.compute_weights(model, train_per, outputs, criterion, attribute_loss_weights)
+
+        loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation, sample_weights=sample_weights)
         # Add ELR regularization if enabled
         if elr is not None and indices is not None:
             loss = loss + elr(outputs, indices, epoch)
@@ -430,7 +463,12 @@ def train_epoch(
             optimizer.first_step(zero_grad=True)
             # Second forward pass at perturbed weights
             outputs = model(inputs, input_ids, attention_mask, aux_features=aux_features, stop_gradient_heads=stop_gradient_heads)
-            loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+            if l2rw is not None and indices is not None:
+                sample_weights = l2rw.compute_weights(model, outputs, labels_a, criterion, attribute_loss_weights)
+            elif meta_weight_trainer is not None and mwn is not None:
+                train_per = _compute_per_sample_loss(outputs, labels_a, criterion, attribute_loss_weights)
+                sample_weights = meta_weight_trainer.compute_weights(model, train_per, outputs, criterion, attribute_loss_weights)
+            loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights, loss_truncation=loss_truncation, sample_weights=sample_weights)
             if elr is not None and indices is not None:
                 loss = loss + elr(outputs, indices, epoch)
             loss.backward()
@@ -1424,4 +1462,684 @@ class DivideMix:
                     " (warmup)" if is_warmup else "")
         if per_attr_acc_log:
             logger.info("DivideMix per-attribute accuracy: %s", per_attr_acc_log)
+        return avg_loss, accuracy, per_attr_acc_log
+
+
+# ── L2RW (Learning to Reweight) ─────────────────────────────────────
+
+
+class L2RW:
+    """
+    Learning to Reweight Examples (Ren et al., ICML 2018).
+
+    Uses a small clean validation set to learn per-sample weights for the
+    training set via a meta-learning objective.
+
+    At each training step:
+      1. Forward pass on training batch, compute per-sample losses.
+      2. Compute gradient surrogate using these losses.
+      3. Forward pass on a hold-out clean validation batch.
+      4. Compute meta loss on the validation batch.
+      5. Compute meta gradient (how much each training sample should matter)
+         and use it to obtain sample weights.
+      6. Reweight the training loss and update model parameters.
+
+    Usage:
+        l2rw = L2RW(val_loader, device)
+        for batch in train_loader:
+            weights = l2rw.compute_weights(model, batch, val_batch, criterion)
+            loss = (weights * per_sample_losses).sum() / weights.sum()
+            loss.backward()
+            optimizer.step()
+    """
+
+    def __init__(
+        self,
+        val_loader: DataLoader,
+        device: torch.device,
+        meta_lr: float = 0.01,
+        meta_weight_decay: float = 0.0,
+    ) -> None:
+        self.val_loader = val_loader
+        self.device = device
+        self.meta_lr = meta_lr
+        self.meta_weight_decay = meta_weight_decay
+        self._val_iter: Optional[Any] = None
+
+    def _get_val_batch(self) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Get a single validation batch, cycling through the loader."""
+        if self._val_iter is None:
+            self._val_iter = iter(self.val_loader)
+        try:
+            batch = next(self._val_iter)
+        except StopIteration:
+            self._val_iter = iter(self.val_loader)
+            batch = next(self._val_iter)
+        inputs = batch[0].to(self.device)
+        labels = _move_labels_to_device(batch[1], self.device)
+        return inputs, labels
+
+    def compute_weights(
+        self,
+        model: torch.nn.Module,
+        train_outputs: Dict[str, torch.Tensor],
+        train_labels: Dict[str, torch.Tensor],
+        criterion: Any,
+        attribute_loss_weights: Optional[Dict[str, float]] = None,
+    ) -> torch.Tensor:
+        """
+        Compute per-sample importance weights via meta-learning.
+
+        Args:
+            model:            The model being trained.
+            train_outputs:    Model outputs on the training batch.
+            train_labels:     Labels for the training batch.
+            criterion:        Loss function.
+            attribute_loss_weights: Optional per-attribute loss multipliers.
+
+        Returns:
+            (B,) weight tensor (detached, for use in the outer training step).
+        """
+        # Per-sample loss on training batch
+        train_per = _compute_per_sample_loss(
+            train_outputs, train_labels, criterion, attribute_loss_weights
+        )
+
+        # Compute pseudo-gradient: d(loss_i) / d(theta) approximated as
+        # grad_theta(loss) where loss = sum_i(train_per_i * 1.0)
+        # We use the final-layer outputs to compute a gradient surrogate.
+        # Simplified: use train_per directly as importance scores.
+        # For a proper implementation, we would compute the dot product
+        # between the validation gradient and each training sample's gradient.
+        # Here we use the efficient first-order approximation:
+        # weight_i ≈ -eta * grad_theta(val_loss)^T * grad_theta(train_loss_i)
+
+        val_inputs, val_labels = self._get_val_batch()
+        val_outputs = model(val_inputs)
+        val_loss = _compute_loss(
+            val_outputs, val_labels, val_labels, 1.0,
+            criterion, attribute_loss_weights,
+        )
+
+        # Compute gradient of validation loss w.r.t. parameters
+        val_grads = torch.autograd.grad(
+            val_loss, model.parameters(), retain_graph=True, create_graph=False,
+        )
+
+        # Compute gradient of each training sample's loss
+        weights = []
+        for i in range(train_per.size(0)):
+            grad_i = torch.autograd.grad(
+                train_per[i], model.parameters(), retain_graph=True, create_graph=False,
+            )
+            # Weight = dot product between validation grad and sample i's grad
+            w_i = sum(
+                (vg * gi).sum()
+                for vg, gi in zip(val_grads, grad_i)
+            )
+            weights.append(w_i)
+
+        w_tensor = torch.stack(weights)
+        # Normalise to non-negative weights via softmax-like transform
+        w_tensor = torch.softmax(w_tensor / 0.1, dim=0) * w_tensor.size(0)
+        return w_tensor.detach()
+
+
+# ── Meta-Weight-Net ─────────────────────────────────────────────────
+
+
+class MetaWeightNet(torch.nn.Module):
+    """
+    Meta-Weight-Net (Shu et al., NeurIPS 2019).
+
+    A small MLP that maps per-sample loss → sample weight.
+    Trained via a bi-level meta-learning objective: the weights produced
+    should minimise the loss on a clean validation set.
+
+    Architecture:
+        input(1) → Linear(1, 16) → BN → ReLU → Linear(16, 1) → Sigmoid * C
+
+    The output is scaled by C so that the maximum possible weight is C.
+    This prevents the meta-network from collapsing to zero weights.
+    """
+
+    def __init__(self, max_weight: float = 10.0, hidden_dim: int = 16) -> None:
+        super().__init__()
+        self.max_weight = max_weight
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(1, hidden_dim),
+            torch.nn.BatchNorm1d(hidden_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_dim, 1),
+            torch.nn.Sigmoid(),
+        )
+
+    def forward(self, losses: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            losses: (B,) per-sample loss values.
+
+        Returns:
+            (B,) sample weights in [0, max_weight].
+        """
+        B = losses.size(0)
+        if B == 0:
+            return losses
+        w = self.net(losses.unsqueeze(1))
+        return w.squeeze(1) * self.max_weight
+
+
+class MetaWeightNetTrainer:
+    """
+    Training procedure for Meta-Weight-Net.
+
+    Uses a bi-level optimisation:
+        Inner loop:  train model with meta-learned weights.
+        Outer loop:  update MetaWeightNet to minimise validation loss.
+
+    Usage:
+        mwn = MetaWeightNet(device)
+        trainer = MetaWeightNetTrainer(mwn, val_loader, device)
+        for batch in train_loader:
+            weights = trainer.compute_weights(model, batch, val_batch, criterion)
+            ...
+    """
+
+    def __init__(
+        self,
+        meta_weight_net: MetaWeightNet,
+        val_loader: DataLoader,
+        device: torch.device,
+        meta_lr: float = 1e-4,
+        meta_weight_decay: float = 0.0,
+    ) -> None:
+        self.mwn = meta_weight_net
+        self.val_loader = val_loader
+        self.device = device
+        self.meta_lr = meta_lr
+        self.meta_weight_decay = meta_weight_decay
+        self.meta_optimizer = torch.optim.Adam(
+            self.mwn.parameters(), lr=meta_lr, weight_decay=meta_weight_decay,
+        )
+        self._val_iter: Optional[Any] = None
+
+    def _get_val_batch(self) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Get a single validation batch, cycling through the loader."""
+        if self._val_iter is None:
+            self._val_iter = iter(self.val_loader)
+        try:
+            batch = next(self._val_iter)
+        except StopIteration:
+            self._val_iter = iter(self.val_loader)
+            batch = next(self._val_iter)
+        inputs = batch[0].to(self.device)
+        labels = _move_labels_to_device(batch[1], self.device)
+        return inputs, labels
+
+    def compute_weights(
+        self,
+        model: torch.nn.Module,
+        train_per: torch.Tensor,
+        train_outputs: Dict[str, torch.Tensor],
+        criterion: Any,
+        attribute_loss_weights: Optional[Dict[str, float]] = None,
+    ) -> torch.Tensor:
+        """
+        Compute Meta-Weight-Net weights and perform one meta-update step.
+
+        Args:
+            model:            The model being trained.
+            train_per:        (B,) per-sample losses from the training batch.
+            train_outputs:    Model outputs on the training batch.
+            criterion:        Loss function.
+            attribute_loss_weights: Optional per-attribute loss multipliers.
+
+        Returns:
+            (B,) weight tensor (detached, for use in the training step.grad).
+        """
+        # ── Forward through Meta-Weight-Net ──
+        weights = self.mwn(train_per.detach())  # (B,)
+
+        # ── Compute weighted training loss ──
+        weighted_loss = (weights * train_per.detach()).sum() / (weights.sum() + 1e-8)
+
+        # ── Meta-gradient step ──
+        # Compute gradient of weighted loss w.r.t. model parameters
+        model_grads = torch.autograd.grad(
+            weighted_loss, model.parameters(), retain_graph=True, create_graph=False,
+        )
+
+        # Store original parameters
+        orig_params = [p.data.clone() for p in model.parameters()]
+
+        # Simulate one step of gradient descent on the model
+        lr = 1.0  # virtual learning rate (cancels out in the meta-gradient)
+        with torch.no_grad():
+            for p, g in zip(model.parameters(), model_grads):
+                if g is not None:
+                    p.data = p.data - lr * g
+
+        # Forward pass on validation batch with updated parameters
+        val_inputs, val_labels = self._get_val_batch()
+        val_outputs = model(val_inputs)
+        val_loss = _compute_loss(
+            val_outputs, val_labels, val_labels, 1.0,
+            criterion, attribute_loss_weights,
+        )
+
+        # Compute meta-gradient: d(val_loss) / d(MWN_params)
+        self.meta_optimizer.zero_grad()
+        val_loss.backward()
+        self.meta_optimizer.step()
+
+        # Restore original model parameters
+        with torch.no_grad():
+            for p, orig in zip(model.parameters(), orig_params):
+                p.data = orig
+
+        # Recompute weights with updated Meta-Weight-Net
+        with torch.no_grad():
+            weights = self.mwn(train_per.detach())
+
+        return weights.detach()
+
+
+# ── Multi-Model Co-Training ─────────────────────────────────────────
+
+
+class MultiModelCoTrain:
+    """
+    Generalised N-model co-training for DivideMix-style training.
+
+    Supports an arbitrary number of models (N >= 2).  Each model:
+      - Maintains its own loss history and GMM split.
+      - Uses the *other* models' clean samples for supervised training
+        (sample exchange).
+      - For label correction: ensemble of all N models > majority-vote
+        confidence threshold.
+
+    This framework subsumes DivideMix (N=2) and Co-teaching (N=2 with
+    small-loss selection instead of GMM) and allows scaling beyond 2
+    models for additional robustness.
+
+    Args:
+        n_samples:          Total number of training samples.
+        num_classes_dict:   Dict[attr_name -> num_classes].
+        device:             Compute device.
+        n_models:           Number of co-training models (default 3).
+        warmup_epochs:      Epochs of full supervision before divide phase.
+        clean_threshold:    GMM probability threshold for clean split.
+        lambda_u:           Weight for unsupervised (noisy) loss.
+        noise_rate:         Estimated label noise rate.
+        beta_elr:           ELR beta parameter.
+        use_gmm:            If True, use GMM for clean/noisy split.
+                            If False, use small-loss selection (Co-teaching).
+    """
+
+    def __init__(
+        self,
+        n_samples: int,
+        num_classes_dict: Dict[str, int],
+        device: torch.device,
+        n_models: int = 3,
+        warmup_epochs: int = 10,
+        clean_threshold: float = 0.5,
+        lambda_u: float = 1.0,
+        noise_rate: float = 0.2,
+        beta_elr: float = 0.7,
+        use_gmm: bool = True,
+    ) -> None:
+        self.n_models = n_models
+        self.warmup_epochs = warmup_epochs
+        self.clean_threshold = clean_threshold
+        self.lambda_u = lambda_u
+        self.noise_rate = noise_rate
+        self.device = device
+        self.use_gmm = use_gmm
+        self.attr_names = sorted(num_classes_dict.keys())
+
+        # Per-model loss histories
+        self.loss_histories: Dict[str, torch.Tensor] = {}
+        self.elr_objs: Dict[str, ELRRegularizer] = {}
+        for i in range(n_models):
+            key = f"model{i}"
+            self.loss_histories[key] = torch.zeros(n_samples, device=device)
+            self.elr_objs[key] = ELRRegularizer(
+                n_samples, num_classes_dict, beta=beta_elr, device=device,
+            )
+
+        self._gmm_cache: Dict[int, Dict[str, Tuple[torch.Tensor, torch.Tensor]]] = {}
+
+    def update_loss_history(
+        self,
+        model_idx: int,
+        indices: torch.Tensor,
+        per_sample_loss: torch.Tensor,
+        momentum: float = 0.9,
+    ) -> None:
+        key = f"model{model_idx}"
+        idx = indices.to(self.device)
+        self.loss_histories[key][idx] = (
+            momentum * self.loss_histories[key][idx]
+            + (1.0 - momentum) * per_sample_loss.detach()
+        )
+
+    def gmm_split(
+        self, model_idx: int, current_epoch: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Fit GMM on model_idx's loss history. Returns (clean_idx, noisy_idx)."""
+        from sklearn.mixture import GaussianMixture
+        key = f"model{model_idx}"
+        losses = self.loss_histories[key].cpu().numpy().reshape(-1, 1)
+        gmm = GaussianMixture(n_components=2, random_state=current_epoch, reg_covar=1e-5)
+        gmm.fit(losses)
+        prob = gmm.predict_proba(losses)
+        if gmm.means_[0] > gmm.means_[1]:
+            prob_clean = prob[:, 1]
+        else:
+            prob_clean = prob[:, 0]
+        prob_t = torch.from_numpy(prob_clean).to(self.device)
+        all_indices = torch.arange(len(losses), device=self.device)
+        clean_idx = all_indices[prob_t > self.clean_threshold]
+        noisy_idx = all_indices[prob_t <= self.clean_threshold]
+        return clean_idx, noisy_idx
+
+    def small_loss_split(
+        self, model_idx: int, epoch: int, num_epochs: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Co-teaching-style small-loss selection. Returns (clean_idx, noisy_idx)."""
+        rate = 1.0 - self.noise_rate * min(1.0, epoch / max(1, num_epochs))
+        n_keep = max(1, int(self.loss_histories[f"model{model_idx}"].size(0) * rate))
+        losses = self.loss_histories[f"model{model_idx}"]
+        _, keep_idx = torch.topk(losses, k=n_keep, largest=False)
+        all_idx = torch.arange(losses.size(0), device=self.device)
+        clean_mask = torch.zeros(losses.size(0), dtype=torch.bool, device=self.device)
+        clean_mask[keep_idx] = True
+        return all_idx[clean_mask], all_idx[~clean_mask]
+
+    def train_epoch(
+        self,
+        models: Tuple[torch.nn.Module, ...],
+        loaders: Tuple[DataLoader, ...],
+        optimizers: Tuple[torch.optim.Optimizer, ...],
+        criterion: Any,
+        device: torch.device,
+        epoch: int = 1,
+        num_epochs: int = 100,
+        text_max_length: int = 256,
+        attribute_loss_weights: Optional[Dict[str, float]] = None,
+        stop_gradient_heads: Optional[set] = None,
+        accuracy_attributes: Optional[set] = None,
+        loss_truncation: Optional[Dict[str, float]] = None,
+        verbose: bool = False,
+    ) -> Tuple[float, float, Dict[str, float]]:
+        """
+        Run one multi-model co-training epoch.
+
+        Args:
+            models:    Tuple of N models.
+            loaders:   Tuple of N DataLoaders (one per model, or same for all).
+            optimizers: Tuple of N optimizers.
+            epoch:      Current 1-indexed epoch number.
+            num_epochs: Total epochs (for rate decay in small-loss selection).
+
+        Returns:
+            (avg_loss, accuracy, per_attr_acc_log)
+        """
+        N = self.n_models
+        for m in models:
+            m.train()
+
+        running_loss = 0.0
+        total_samples = 0
+        correct_total = 0
+        sample_total = 0
+        per_attr_correct: Dict[str, int] = {}
+        per_attr_total: Dict[str, int] = {}
+
+        is_warmup = epoch <= self.warmup_epochs
+
+        # Zip iterators over all model loaders
+        loaders_iters = [iter(loader) for loader in loaders]
+
+        while True:
+            # Fetch one batch per model (or same batch if same loader)
+            batch_data: list = []
+            for it in loaders_iters:
+                try:
+                    batch_data.append(next(it))
+                except StopIteration:
+                    # End of epoch
+                    if total_samples == 0:
+                        continue
+                    break
+            if len(batch_data) < N:
+                break
+
+            # Use the first model's batch for everything (shared data source)
+            batch = batch_data[0]
+            indices = batch[-1].to(device)
+            batch = batch[:-1]
+
+            inputs = batch[0].to(device)
+            labels = _move_labels_to_device(batch[1], device)
+            batch_size = inputs.size(0)
+            if len(batch) >= 4:
+                input_ids = batch[2].to(device)
+                attention_mask = batch[3].to(device)
+                aux_features = batch[4].to(device) if len(batch) >= 5 else None
+            else:
+                input_ids = torch.zeros(batch_size, text_max_length, dtype=torch.long, device=device)
+                attention_mask = torch.zeros(batch_size, text_max_length, dtype=torch.long, device=device)
+                aux_features = batch[2].to(device) if len(batch) >= 3 else None
+
+            # ── Forward all models ──
+            all_outputs: list = []
+            for m in models:
+                out = m(inputs, input_ids, attention_mask, aux_features=aux_features,
+                        stop_gradient_heads=stop_gradient_heads)
+                all_outputs.append(out)
+
+            # ── Per-sample losses ──
+            all_per = []
+            for i, out in enumerate(all_outputs):
+                per = _compute_per_sample_loss(out, labels, criterion, attribute_loss_weights)
+                all_per.append(per)
+                self.update_loss_history(i, indices, per)
+
+            # ── Warmup: standard supervised training ──
+            if is_warmup:
+                batch_loss = 0.0
+                for i in range(N):
+                    opt = optimizers[i]
+                    use_sam = hasattr(opt, 'first_step')
+                    opt.zero_grad()
+                    loss_i = _compute_loss(all_outputs[i], labels, labels, 1.0,
+                                           criterion, attribute_loss_weights,
+                                           loss_truncation=loss_truncation)
+                    loss_i.backward()
+                    if use_sam:
+                        opt.first_step(zero_grad=True)
+                        out_i_sam = models[i](inputs, input_ids, attention_mask,
+                                              aux_features=aux_features,
+                                              stop_gradient_heads=stop_gradient_heads)
+                        loss_i = _compute_loss(out_i_sam, labels, labels, 1.0,
+                                               criterion, attribute_loss_weights,
+                                               loss_truncation=loss_truncation)
+                        loss_i.backward()
+                        opt.second_step(zero_grad=True)
+                    else:
+                        opt.step()
+                    batch_loss += loss_i.item()
+                running_loss += (batch_loss / N) * batch_size
+                total_samples += batch_size
+                c, n = _compute_accuracy(all_outputs[0], labels, accuracy_attributes)
+                correct_total += c
+                sample_total += n
+                for attr_name, attr_acc in _compute_per_attribute_accuracy(all_outputs[0], labels).items():
+                    bn = labels[attr_name].size(0) if isinstance(labels, dict) else batch_size
+                    per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * bn)
+                    per_attr_total[attr_name] = per_attr_total.get(attr_name, 0) + bn
+                continue
+
+            # ── Divide phase: GMM or small-loss split ──
+            if epoch not in self._gmm_cache:
+                self._gmm_cache[epoch] = {}
+                for i in range(N):
+                    if self.use_gmm:
+                        clean_i, noisy_i = self.gmm_split(i, epoch)
+                    else:
+                        clean_i, noisy_i = self.small_loss_split(i, epoch, num_epochs)
+                    self._gmm_cache[epoch][f"clean{i}"] = clean_i
+                    self._gmm_cache[epoch][f"noisy{i}"] = noisy_i
+                    if verbose:
+                        logger.info(
+                            "MCT epoch %d model %d: clean=%d noisy=%d",
+                            epoch, i, len(clean_i), len(noisy_i),
+                        )
+            split = self._gmm_cache[epoch]
+
+            # ── For each model: supervised on other models' clean set ──
+            def in_split(split_idx: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tensor:
+                s = set(split_idx.tolist())
+                return torch.tensor([i.item() in s for i in batch_idx], device=device)
+
+            batch_loss = 0.0
+            for i in range(N):
+                # This model uses clean samples from ALL OTHER models
+                other_clean_mask_list = []
+                other_noisy_mask_list = []
+                for j in range(N):
+                    if j == i:
+                        continue
+                    clean_j = split[f"clean{j}"]
+                    noisy_j = split[f"noisy{j}"]
+                    other_clean_mask_list.append(in_split(clean_j, indices))
+                    other_noisy_mask_list.append(in_split(noisy_j, indices))
+
+                # Union of other models' clean masks
+                clean_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
+                noisy_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
+                for cm in other_clean_mask_list:
+                    clean_mask = clean_mask | cm
+                for nm in other_noisy_mask_list:
+                    noisy_mask = noisy_mask | nm
+                # A sample can't be both clean and noisy; clean takes precedence
+                noisy_mask = noisy_mask & ~clean_mask
+
+                # Supervised loss on clean samples (using the union of others' clean)
+                sup = torch.tensor(0.0, device=device)
+                if clean_mask.any():
+                    out_clean = {k: v[clean_mask] for k, v in all_outputs[i].items()}
+                    labels_clean = {k: v[clean_mask] for k, v in labels.items()}
+                    sup = _compute_loss(out_clean, labels_clean, labels_clean, 1.0,
+                                        criterion, attribute_loss_weights,
+                                        loss_truncation=loss_truncation)
+
+                # Consistency loss on noisy samples (use ensemble of others)
+                unsup = torch.tensor(0.0, device=device)
+                if noisy_mask.any():
+                    out_noisy = {k: v[noisy_mask] for k, v in all_outputs[i].items()}
+                    # Ensemble of other models' predictions on these samples
+                    ensemble_probs = None
+                    n_others = 0
+                    for j in range(N):
+                        if j == i:
+                            continue
+                        with torch.no_grad():
+                            probs_j = torch.softmax(all_outputs[j][noisy_mask], dim=-1)
+                        if ensemble_probs is None:
+                            ensemble_probs = probs_j
+                        else:
+                            ensemble_probs = ensemble_probs + probs_j
+                        n_others += 1
+                    if ensemble_probs is not None:
+                        ensemble_probs = ensemble_probs / n_others
+                        for attr in out_noisy:
+                            if attr not in ensemble_probs:
+                                continue
+                            w = (attribute_loss_weights or {}).get(attr, 1.0)
+                            unsup = unsup + w * torch.mean(
+                                torch.sum(
+                                    -ensemble_probs[attr].detach()
+                                    * torch.log_softmax(out_noisy[attr], dim=-1),
+                                    dim=-1,
+                                )
+                            )
+
+                # ELR on noisy samples
+                elr_val = torch.tensor(0.0, device=device)
+                if noisy_mask.any():
+                    out_noisy_elr = {k: v[noisy_mask] for k, v in all_outputs[i].items()}
+                    elr_val = self.elr_objs[f"model{i}"](
+                        out_noisy_elr, indices[noisy_mask], epoch,
+                    )
+
+                total_loss_i = sup + self.lambda_u * unsup + elr_val
+
+                opt = optimizers[i]
+                use_sam = hasattr(opt, 'first_step')
+                opt.zero_grad()
+                total_loss_i.backward()
+                torch.nn.utils.clip_grad_norm_(models[i].parameters(), max_norm=1.0)
+                if use_sam:
+                    opt.first_step(zero_grad=True)
+                    out_i_sam = models[i](inputs, input_ids, attention_mask,
+                                          aux_features=aux_features,
+                                          stop_gradient_heads=stop_gradient_heads)
+                    sup_sam = torch.tensor(0.0, device=device)
+                    if clean_mask.any():
+                        out_sam_clean = {k: v[clean_mask] for k, v in out_i_sam.items()}
+                        sup_sam = _compute_loss(out_sam_clean, labels_clean, labels_clean, 1.0,
+                                                criterion, attribute_loss_weights,
+                                                loss_truncation=loss_truncation)
+                    unsup_sam = torch.tensor(0.0, device=device)
+                    if noisy_mask.any():
+                        out_sam_noisy = {k: v[noisy_mask] for k, v in out_i_sam.items()}
+                        for attr in out_sam_noisy:
+                            if attr not in ensemble_probs:
+                                continue
+                            w = (attribute_loss_weights or {}).get(attr, 1.0)
+                            unsup_sam = unsup_sam + w * torch.mean(
+                                torch.sum(
+                                    -ensemble_probs[attr].detach()
+                                    * torch.log_softmax(out_sam_noisy[attr], dim=-1),
+                                    dim=-1,
+                                )
+                            )
+                    elr_val_sam = torch.tensor(0.0, device=device)
+                    if noisy_mask.any():
+                        out_sam_noisy_elr = {k: v[noisy_mask] for k, v in out_i_sam.items()}
+                        elr_val_sam = self.elr_objs[f"model{i}"](
+                            out_sam_noisy_elr, indices[noisy_mask], epoch,
+                        )
+                    total_sam = sup_sam + self.lambda_u * unsup_sam + elr_val_sam
+                    total_sam.backward()
+                    opt.second_step(zero_grad=True)
+                else:
+                    opt.step()
+
+                batch_loss += total_loss_i.item()
+
+            running_loss += (batch_loss / N) * batch_size
+            total_samples += batch_size
+            c, n = _compute_accuracy(all_outputs[0], labels, accuracy_attributes)
+            correct_total += c
+            sample_total += n
+            for attr_name, attr_acc in _compute_per_attribute_accuracy(all_outputs[0], labels).items():
+                bn = labels[attr_name].size(0) if isinstance(labels, dict) else batch_size
+                per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * bn)
+                per_attr_total[attr_name] = per_attr_total.get(attr_name, 0) + bn
+
+        avg_loss = running_loss / total_samples if total_samples > 0 else 0.0
+        accuracy = correct_total / sample_total if sample_total > 0 else 0.0
+        per_attr_acc_log = {
+            attr: round(per_attr_correct[attr] / per_attr_total[attr], 4)
+            for attr in per_attr_correct if per_attr_total.get(attr, 0) > 0
+        }
+        logger.info("MultiModelCoTrain epoch %d: loss=%.4f, accuracy=%.4f%s",
+                    epoch, avg_loss, accuracy,
+                    " (warmup)" if is_warmup else "")
+        if per_attr_acc_log:
+            logger.info("MCT per-attribute accuracy: %s", per_attr_acc_log)
         return avg_loss, accuracy, per_attr_acc_log

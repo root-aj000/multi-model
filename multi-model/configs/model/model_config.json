@@ -386,6 +386,69 @@
   "FIXMATCH_LOSS_WEIGHT": 1.0,
   "_comment_FIXMATCH_LOSS_WEIGHT": "Weight for FixMatch loss. 1.0 = same scale as supervised CE.",
 
+  "SIMCLR_PRETRAIN": false,
+  "_comment_SIMCLR_PRETRAIN": "If true, run SimCLR self-supervised pre-training before supervised training.",
+
+  "SIMCLR_CONFIG": {
+    "projection_dim": 128,
+    "temperature": 0.5,
+    "epochs": 200,
+    "batch_size": 256,
+    "lr": 0.3,
+    "weight_decay": 1e-4
+  },
+  "_comment_SIMCLR_CONFIG": "Hyperparameters for SimCLR pre-training. Only used when SIMCLR_PRETRAIN=true.",
+
+  "USE_PROTOTYPICAL_HEADS": false,
+  "_comment_USE_PROTOTYPICAL_HEADS": "If true, replaces linear classification heads for NOISY_ATTRIBUTES with PrototypicalNetwork heads (cosine similarity to learnable prototypes).",
+
+  "PROTOTYPICAL_CONFIG": {
+    "n_prototypes_per_class": 3,
+    "normalize_prototypes": true
+  },
+  "_comment_PROTOTYPICAL_CONFIG": "Prototypical head hyperparameters.",
+
+  "USE_L2RW": false,
+  "_comment_USE_L2RW": "If true, use Learning to Reweight (Ren et al.) — meta-learning per-sample weights from a clean validation set.",
+
+  "L2RW_CONFIG": {
+    "meta_lr": 0.01,
+    "meta_weight_decay": 0.0
+  },
+  "_comment_L2RW_CONFIG": "Hyperparameters for L2RW meta-optimiser.",
+
+  "USE_META_WEIGHT_NET": false,
+  "_comment_USE_META_WEIGHT_NET": "If true, use Meta-Weight-Net (Shu et al.) — MLP mapping per-sample loss to weight, trained with bi-level meta-objective.",
+
+  "META_WEIGHT_NET_CONFIG": {
+    "hidden_dim": 16,
+    "max_weight": 10.0,
+    "meta_lr": 1e-4
+  },
+  "_comment_META_WEIGHT_NET_CONFIG": "Hyperparameters for Meta-Weight-Net.",
+
+  "N_CO_TRAIN_MODELS": 2,
+  "_comment_N_CO_TRAIN_MODELS": "Number of co-training models for DivideMix/MultiModelCoTrain. 2 = standard DivideMix. 3+ = majority-vote ensemble.",
+
+  "USE_CONFIDENT_LEARNING": false,
+  "_comment_USE_CONFIDENT_LEARNING": "If true, run CleanLab-style confident learning offline before each epoch to identify likely mislabeled samples.",
+
+  "CONFIDENT_LEARNING_THRESHOLD": "auto",
+  "_comment_CONFIDENT_LEARNING_THRESHOLD": "Threshold for confident learning. 'auto' uses per-class thresholds from CleanLab.",
+
+  "USE_UDA_TEXT_AUG": false,
+  "_comment_USE_UDA_TEXT_AUG": "If true, apply UDA-style text augmentation (back-translation or BERT masking) during training.",
+
+  "UDA_TEXT_AUG_CONFIG": {
+    "method": "back_translate",
+    "src_lang": "en",
+    "tgt_lang": "fr",
+    "num_augments": 1,
+    "keep_original": true,
+    "batch_size": 32
+  },
+  "_comment_UDA_TEXT_AUG_CONFIG": "Hyperparameters for text augmentation. method can be 'back_translate' or 'bert_mask'.",
+
   "early_stopping_patience": 10,
   "_comment_early_stopping_patience": [
     "Stop training if val accuracy does not improve for this many consecutive epochs.",
