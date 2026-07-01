@@ -365,6 +365,27 @@
   "DIVIDEMIX_LAMBDA_U": 1.0,
   "_comment_DIVIDEMIX_LAMBDA_U": "Weight for unsupervised (noisy sample) loss in DivideMix. Reduced from 25.0 → 1.0: original DivideMix designed for single-label CIFAR, but with 9 attributes the consistency CE sums to ~10-18 per sample — 25x gave 250-450 loss, overwhelming supervised signal.",
 
+  "LABEL_CORRECTION_ENABLED": true,
+  "_comment_LABEL_CORRECTION_ENABLED": "Progressive label correction for noisy samples identified by DivideMix GMM. After GMM split, replaces noisy labels with model's argmax prediction where confidence > threshold. Fraction corrected ramps from 0 -> max_rate over ramp_epochs.",
+
+  "LABEL_CORRECTION_RAMP_EPOCHS": 10,
+  "_comment_LABEL_CORRECTION_RAMP_EPOCHS": "Number of divide-phase epochs to ramp correction fraction from 0 to LABEL_CORRECTION_MAX_RATE.",
+
+  "LABEL_CORRECTION_MAX_RATE": 0.9,
+  "_comment_LABEL_CORRECTION_MAX_RATE": "Max fraction of eligible noisy samples corrected per epoch. epoch 11=0%, 12=9%, 15=45%, 20=90%, 30+=90%.", 
+
+  "LABEL_CORRECTION_CONFIDENCE_THRESHOLD": 0.9,
+  "_comment_LABEL_CORRECTION_CONFIDENCE_THRESHOLD": "Min softmax confidence to accept a label correction. Prevents low-confidence corrections from introducing noise.",
+
+  "FIXMATCH_ENABLED": true,
+  "_comment_FIXMATCH_ENABLED": "FixMatch-style consistency on noisy-set samples. Strong-aug forward pass, CE against same-model weak-aug pseudo-label gated by confidence threshold.",
+
+  "FIXMATCH_CONFIDENCE_THRESHOLD": 0.95,
+  "_comment_FIXMATCH_CONFIDENCE_THRESHOLD": "Min pseudo-label confidence for FixMatch loss. Only applies where weak-aug max(softmax) > this value.",
+
+  "FIXMATCH_LOSS_WEIGHT": 1.0,
+  "_comment_FIXMATCH_LOSS_WEIGHT": "Weight for FixMatch loss. 1.0 = same scale as supervised CE.",
+
   "early_stopping_patience": 10,
   "_comment_early_stopping_patience": [
     "Stop training if val accuracy does not improve for this many consecutive epochs.",

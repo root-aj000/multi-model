@@ -247,3 +247,79 @@ def build_image_transform(
         return torch.from_numpy(image.transpose(2, 0, 1)).float()
 
     return transform
+
+
+def build_strong_image_transform(
+    size: Tuple[int, int] = DEFAULT_IMAGE_SIZE,
+    aug_cfg: Optional[Dict[str, Any]] = None,
+) -> Callable:
+    """
+    Build an image transformation pipeline with STRONG augmentation.
+
+    Used by FixMatch for consistency regularisation.  Applies the standard
+    weak augmentations PLUS extra aggressive ops (RandAugment-style) on
+    raw uint8 pixels before normalisation.
+
+    Pipeline: resize → weak augment → strong augment → normalize → tensor.
+
+    Args:
+        size:    Target (width, height).
+        aug_cfg: Weak augmentation config dict. Falls back to _DEFAULT_AUG.
+
+    Returns:
+        Callable: (H,W,C) uint8 numpy array → (C,H,W) float32 tensor.
+    """
+    cfg = aug_cfg or _DEFAULT_AUG
+
+    def transform(image: np.ndarray) -> torch.Tensor:
+        image = resize_image(image, size)
+        # Weak augment (same as training)
+        image = augment_image(image, aug_cfg=cfg)
+
+        # ── Strong augment (extra aggressive ops on uint8 raw pixels) ──
+        pil = Image.fromarray(image.astype(np.uint8))
+
+        # Random perspective
+        if random.random() < 0.5:
+            w, h = pil.size
+            distortion = 0.3 + 0.2 * random.random()  # [0.3, 0.5]
+            from PIL import ImageTransform
+            # Simple perspective with random displacement
+            import math
+            half_w, half_h = w // 2, h // 2
+            dx1 = int(half_w * distortion * random.uniform(-1, 1))
+            dy1 = int(half_h * distortion * random.uniform(-1, 1))
+            dx2 = int(half_w * distortion * random.uniform(-1, 1))
+            dy2 = int(half_h * distortion * random.uniform(-1, 1))
+            dx3 = int(half_w * distortion * random.uniform(-1, 1))
+            dy3 = int(half_h * distortion * random.uniform(-1, 1))
+            dx4 = int(half_w * distortion * random.uniform(-1, 1))
+            dy4 = int(half_h * distortion * random.uniform(-1, 1))
+            coeffs = ImageTransform.QuadTransform(
+                (0, 0, w, 0, w, h, 0, h),
+                (dx1, dy1, w+dx2, dy2, w+dx3, h+dy3, dx4, h+dy4)
+            ).get_coeffs()
+            pil = pil.transform(pil.size, ImageTransform.PERSPECTIVE, coeffs, ImageTransform.BILINEAR)
+
+        # Extra colour jitter (more aggressive)
+        for _ in range(random.randint(1, 3)):
+            if random.random() < 0.5:
+                factor = random.uniform(0.6, 1.4)
+                pil = ImageEnhance.Brightness(pil).enhance(factor)
+            if random.random() < 0.5:
+                factor = random.uniform(0.6, 1.4)
+                pil = ImageEnhance.Contrast(pil).enhance(factor)
+            if random.random() < 0.5:
+                factor = random.uniform(0.6, 1.4)
+                pil = ImageEnhance.Color(pil).enhance(factor)
+
+        # Extra rotation
+        if random.random() < 0.5:
+            angle = random.uniform(-30, 30)
+            pil = pil.rotate(angle, resample=Image.BILINEAR, expand=False)
+
+        image = np.array(pil)
+        image = normalize_image(image)
+        return torch.from_numpy(image.transpose(2, 0, 1)).float()
+
+    return transform

@@ -11,12 +11,16 @@ BUG-06 FIX: _compute_accuracy now returns (correct_count, total_count) so
             the previous macro-average-across-heads-and-batches metric.
 """
 
+import copy
 import logging
 from typing import Any, Dict, Tuple
 from typing import Optional
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+
+from torchvision.transforms import functional as TF
+from torchvision.transforms import v2 as T
 
 from lib.utils.losses import FocalLoss, GCELoss
 
@@ -799,6 +803,56 @@ def train_epoch_coteaching(
     return avg_loss, accuracy, per_attr_acc_log
 
 
+# ── FixMatch Strong Augmentation ─────────────────────────────────────
+
+
+class StrongAugment(torch.nn.Module):
+    """
+    Strong augmentation for FixMatch-style consistency.
+
+    Applies aggressive spatial + colour transforms to batched normalized
+    tensors.  All ops work directly on float tensors (no denormalize step
+    needed) so the extra forward pass is cheap.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # RandomApply containers for batched tensor ops
+        self.spatial = T.RandomApply(
+            [T.RandomAffine(degrees=(-20, 20), translate=(0.12, 0.12),
+                            scale=(0.75, 1.25), fill=0.0)],
+            p=0.9,
+        )
+        self.perspective = T.RandomPerspective(distortion_scale=0.3, p=0.5, fill=0.0)
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            images: (B, C, H, W) normalized float tensor.
+
+        Returns:
+            Strongly augmented (B, C, H, W) tensor.
+        """
+        x = self.spatial(images)
+        x = self.perspective(x)
+        # Random colour jitter on tensor range (works because visible
+        # spectrum is roughly centred around 0 after ImageNet norm)
+        if x.size(0) > 0 and torch.rand(1).item() < 0.8:
+            with torch.no_grad():
+                brightness = 0.6 + 0.8 * torch.rand(x.size(0), 1, 1, 1, device=x.device)
+                contrast = 0.6 + 0.8 * torch.rand(x.size(0), 1, 1, 1, device=x.device)
+                saturation = 0.6 + 0.8 * torch.rand(x.size(0), 1, 1, 1, device=x.device)
+                # Apply brightness/contrast/saturation channel-wise
+                for i in range(x.size(0)):
+                    if torch.rand(1).item() < 0.5:
+                        x[i] = TF.adjust_brightness(x[i], brightness[i].item())
+                    if torch.rand(1).item() < 0.5:
+                        x[i] = TF.adjust_contrast(x[i], contrast[i].item())
+                    if torch.rand(1).item() < 0.5:
+                        x[i] = TF.adjust_saturation(x[i], saturation[i].item())
+        return x
+
+
 # ── DivideMix ────────────────────────────────────────────────────────
 
 
@@ -846,6 +900,13 @@ class DivideMix:
         noise_rate: float = 0.2,
         beta_elr: float = 0.7,
         elr_T: int = 100,
+        label_correction_enabled: bool = True,
+        label_correction_ramp_epochs: int = 10,
+        label_correction_max_rate: float = 0.9,
+        label_correction_confidence_threshold: float = 0.9,
+        fixmatch_enabled: bool = True,
+        fixmatch_confidence_threshold: float = 0.95,
+        fixmatch_loss_weight: float = 1.0,
     ) -> None:
         self.warmup_epochs = warmup_epochs
         self.clean_threshold = clean_threshold
@@ -864,6 +925,27 @@ class DivideMix:
         self.elr1 = ELRRegularizer(n_samples, num_classes_dict, beta=beta_elr, device=device)
         self.elr2 = ELRRegularizer(n_samples, num_classes_dict, beta=beta_elr, device=device)
         self.elr_T = elr_T
+
+        # ── Progressive label correction ──
+        self.label_correction_enabled = label_correction_enabled
+        self.label_correction_ramp_epochs = label_correction_ramp_epochs
+        self.label_correction_max_rate = label_correction_max_rate
+        self.label_correction_confidence_threshold = label_correction_confidence_threshold
+
+        self.attr_names = sorted(num_classes_dict.keys())
+        # Per-attribute corrected label: (n_samples,) long tensor, -1 = not corrected
+        self.correction_label: Dict[str, torch.Tensor] = {}
+        # Per-attribute correction confidence: (n_samples,) float, 0 = not corrected
+        self.correction_confidence: Dict[str, torch.Tensor] = {}
+        for name in self.attr_names:
+            self.correction_label[name] = torch.full((n_samples,), -1, dtype=torch.long, device=device)
+            self.correction_confidence[name] = torch.zeros(n_samples, device=device)
+
+        # ── FixMatch consistency ──
+        self.fixmatch_enabled = fixmatch_enabled
+        self.fixmatch_confidence_threshold = fixmatch_confidence_threshold
+        self.fixmatch_loss_weight = fixmatch_loss_weight
+        self.strong_aug = StrongAugment().to(device) if fixmatch_enabled else None
 
     def update_loss_history(
         self,
@@ -907,6 +989,141 @@ class DivideMix:
         clean_idx = all_indices[prob_t > self.clean_threshold]
         noisy_idx = all_indices[prob_t <= self.clean_threshold]
         return clean_idx, noisy_idx
+
+    def _apply_stored_corrections(
+        self,
+        labels: Dict[str, torch.Tensor],
+        indices: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Apply existing label corrections (from previous epochs) to a batch.
+
+        Returns a copy of labels with corrected values overwritten.
+        """
+        if not self.label_correction_enabled:
+            return labels
+        corrected = {k: v.clone() for k, v in labels.items()}
+        for attr_name in self.attr_names:
+            if attr_name not in corrected or attr_name not in self.correction_label:
+                continue
+            stored = self.correction_label[attr_name][indices]
+            mask = stored >= 0
+            if mask.any():
+                corrected[attr_name] = corrected[attr_name].clone()
+                corrected[attr_name][mask] = stored[mask]
+        return corrected
+
+    def _update_corrections(
+        self,
+        out1: Dict[str, torch.Tensor],
+        out2: Dict[str, torch.Tensor],
+        indices: torch.Tensor,
+        noisy_mask: torch.Tensor,
+        epoch: int,
+    ) -> None:
+        """
+        Compute new label corrections for noisy samples and store them.
+
+        Updates self.correction_label / self.correction_confidence in-place.
+        Corrected labels are used by _apply_stored_corrections in future batches.
+        """
+        if not self.label_correction_enabled or not noisy_mask.any() or epoch <= self.warmup_epochs:
+            return
+
+        ramp_start = self.warmup_epochs + 1
+        ramp_end = ramp_start + self.label_correction_ramp_epochs
+        p = min(1.0, max(0.0, (epoch - ramp_start) / max(1, ramp_end - ramp_start)))
+        fraction = p * self.label_correction_max_rate
+        if fraction <= 0.0:
+            return
+
+        noisy_idx_batch = indices[noisy_mask]
+
+        for attr_name in self.attr_names:
+            if attr_name not in out1 or attr_name not in out2:
+                continue
+
+            # Ensemble prediction: avg of both models' softmax
+            probs = (torch.softmax(out1[attr_name], dim=-1) +
+                     torch.softmax(out2[attr_name], dim=-1)) / 2.0
+            confidences, predictions = probs.max(dim=-1)
+
+            noisy_confs = confidences[noisy_mask]
+            noisy_preds = predictions[noisy_mask]
+            noisy_stored_conf = self.correction_confidence[attr_name][noisy_idx_batch]
+
+            # Eligible: confidence > threshold AND confidence > previously stored
+            eligible_mask = (noisy_confs >= self.label_correction_confidence_threshold) & \
+                            (noisy_confs > noisy_stored_conf)
+            if not eligible_mask.any():
+                continue
+
+            eligible_indices = torch.where(eligible_mask)[0]
+            eligible_confs = noisy_confs[eligible_indices]
+            k = int(len(eligible_indices) * fraction)
+            if k == 0:
+                continue
+            _, topk = torch.topk(eligible_confs, k=k)
+
+            correct_ids = eligible_indices[topk]                 # positions within noisy subset
+            correct_dataset_ids = noisy_idx_batch[correct_ids]   # dataset-wide indices
+            correct_labels = noisy_preds[correct_ids]
+
+            self.correction_label[attr_name][correct_dataset_ids] = correct_labels
+            self.correction_confidence[attr_name][correct_dataset_ids] = noisy_confs[correct_ids]
+
+    def _fixmatch_loss(
+        self,
+        out_weak: Dict[str, torch.Tensor],
+        out_strong: Optional[Dict[str, torch.Tensor]],
+        noisy_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        FixMatch-style consistency loss on noisy samples.
+
+        For each attribute, compute pseudo-label from weak-aug prediction
+        (argmax of softmax).  Only apply CE where weak-aug confidence >
+        fixmatch_confidence_threshold.
+
+        Args:
+            out_weak:   Model outputs on weakly-augmented inputs.
+            out_strong: Model outputs on strongly-augmented inputs (same
+                        noisy samples only), or None if no noisy samples.
+            noisy_mask: (B,) boolean mask.
+
+        Returns:
+            Scalar FixMatch loss (0 if no noisy samples or fixmatch disabled).
+        """
+        if not self.fixmatch_enabled or out_strong is None or not noisy_mask.any():
+            return torch.tensor(0.0, device=self.device)
+
+        loss = torch.tensor(0.0, device=self.device)
+        n_active = 0
+
+        for attr_name in self.attr_names:
+            if attr_name not in out_weak or attr_name not in out_strong:
+                continue
+
+            # Weak-aug pseudo-labels (argmax) and confidence
+            weak_probs = torch.softmax(out_weak[attr_name][noisy_mask], dim=-1)
+            confidences, pseudo_labels = weak_probs.max(dim=-1)
+
+            # Only keep where confidence > threshold
+            confident_mask = confidences >= self.fixmatch_confidence_threshold
+            if not confident_mask.any():
+                continue
+
+            # CE between strong-aug prediction and weak-aug pseudo-label
+            strong_logits = out_strong[attr_name]
+            matched = strong_logits[confident_mask]
+            targets = pseudo_labels[confident_mask]
+            loss = loss + F.cross_entropy(matched, targets)
+            n_active += 1
+
+        if n_active == 0:
+            return torch.tensor(0.0, device=self.device)
+
+        return self.fixmatch_loss_weight * loss / n_active
 
     def train_epoch(
         self,
@@ -1036,10 +1253,13 @@ class DivideMix:
             out2 = model2(inputs, input_ids, attention_mask, aux_features=aux_features,
                           stop_gradient_heads=stop_gradient_heads)
 
+            # Apply stored label corrections from PREVIOUS epochs
+            labels_corrected = self._apply_stored_corrections(labels, indices)
+
             # Per-sample losses updated from OTHER model's output
-            # (cross-update for GMM consistency)
-            loss1_per = _compute_per_sample_loss(out2, labels, criterion, attribute_loss_weights)
-            loss2_per = _compute_per_sample_loss(out1, labels, criterion, attribute_loss_weights)
+            # (cross-update for GMM consistency, with corrected labels)
+            loss1_per = _compute_per_sample_loss(out2, labels_corrected, criterion, attribute_loss_weights)
+            loss2_per = _compute_per_sample_loss(out1, labels_corrected, criterion, attribute_loss_weights)
             self.update_loss_history("model1", indices, loss1_per)
             self.update_loss_history("model2", indices, loss2_per)
 
@@ -1071,6 +1291,32 @@ class DivideMix:
             clean_mask2 = in_split(clean2, indices)
             noisy_mask2 = ~clean_mask2
 
+            # ── Progressive label correction for noisy samples ──
+            self._update_corrections(out1, out2, indices, noisy_mask1, epoch)
+
+            # ── FixMatch: forward pass on strongly-augmented noisy samples ──
+            out1_strong = None
+            out2_strong = None
+            if self.fixmatch_enabled and epoch > self.warmup_epochs:
+                if noisy_mask1.any():
+                    strong_inputs1 = self.strong_aug(inputs[noisy_mask1])
+                    out1_strong = model1(
+                        strong_inputs1,
+                        input_ids[noisy_mask1] if input_ids.dim() > 1 else input_ids,
+                        attention_mask[noisy_mask1] if attention_mask.dim() > 1 else attention_mask,
+                        aux_features=aux_features[noisy_mask1] if aux_features is not None else None,
+                        stop_gradient_heads=stop_gradient_heads,
+                    )
+                if noisy_mask2.any():
+                    strong_inputs2 = self.strong_aug(inputs[noisy_mask2])
+                    out2_strong = model2(
+                        strong_inputs2,
+                        input_ids[noisy_mask2] if input_ids.dim() > 1 else input_ids,
+                        attention_mask[noisy_mask2] if attention_mask.dim() > 1 else attention_mask,
+                        aux_features=aux_features[noisy_mask2] if aux_features is not None else None,
+                        stop_gradient_heads=stop_gradient_heads,
+                    )
+
             def _divide_loss_fn(out_a, out_b, clean_mask, noisy_mask, elr_obj, labels_in):
                 """Compute supervised + consistency + ELR loss for one model."""
                 sup = torch.tensor(0.0, device=device)
@@ -1098,11 +1344,15 @@ class DivideMix:
                     elr_val = elr_obj(out_noisy, indices[noisy_mask], epoch)
                 return sup + self.lambda_u * unsup + elr_val
 
+            # Compute FixMatch loss on weakly-augmented outputs
+            fm_loss1 = self._fixmatch_loss(out1, out1_strong, noisy_mask1)
+            fm_loss2 = self._fixmatch_loss(out2, out2_strong, noisy_mask2)
+
             use_sam1 = hasattr(optimizer1, 'first_step')
             use_sam2 = hasattr(optimizer2, 'first_step')
 
             # ── Model1 backward + step ──
-            total_loss1 = _divide_loss_fn(out1, out2, clean_mask1, noisy_mask1, self.elr1, labels)
+            total_loss1 = _divide_loss_fn(out1, out2, clean_mask1, noisy_mask1, self.elr1, labels_corrected) + fm_loss1
             optimizer1.zero_grad()
             total_loss1.backward()
             torch.nn.utils.clip_grad_norm_(model1.parameters(), max_norm=1.0)
@@ -1110,14 +1360,24 @@ class DivideMix:
                 optimizer1.first_step(zero_grad=True)
                 out1_sam = model1(inputs, input_ids, attention_mask, aux_features=aux_features,
                                   stop_gradient_heads=stop_gradient_heads)
-                total_loss1_sam = _divide_loss_fn(out1_sam, out2, clean_mask1, noisy_mask1, self.elr1, labels)
+                fm_loss1_sam = torch.tensor(0.0, device=device)
+                if self.fixmatch_enabled and noisy_mask1.any():
+                    out1_strong_sam = model1(
+                        strong_inputs1,
+                        input_ids[noisy_mask1],
+                        attention_mask[noisy_mask1],
+                        aux_features=aux_features[noisy_mask1] if aux_features is not None else None,
+                        stop_gradient_heads=stop_gradient_heads,
+                    )
+                    fm_loss1_sam = self._fixmatch_loss(out1_sam, out1_strong_sam, noisy_mask1)
+                total_loss1_sam = _divide_loss_fn(out1_sam, out2, clean_mask1, noisy_mask1, self.elr1, labels_corrected) + fm_loss1_sam
                 total_loss1_sam.backward()
                 optimizer1.second_step(zero_grad=True)
             else:
                 optimizer1.step()
 
             # ── Model2 backward + step ──
-            total_loss2 = _divide_loss_fn(out2, out1, clean_mask2, noisy_mask2, self.elr2, labels)
+            total_loss2 = _divide_loss_fn(out2, out1, clean_mask2, noisy_mask2, self.elr2, labels_corrected) + fm_loss2
             optimizer2.zero_grad()
             total_loss2.backward()
             torch.nn.utils.clip_grad_norm_(model2.parameters(), max_norm=1.0)
@@ -1125,7 +1385,17 @@ class DivideMix:
                 optimizer2.first_step(zero_grad=True)
                 out2_sam = model2(inputs, input_ids, attention_mask, aux_features=aux_features,
                                   stop_gradient_heads=stop_gradient_heads)
-                total_loss2_sam = _divide_loss_fn(out2_sam, out1, clean_mask2, noisy_mask2, self.elr2, labels)
+                fm_loss2_sam = torch.tensor(0.0, device=device)
+                if self.fixmatch_enabled and noisy_mask2.any():
+                    out2_strong_sam = model2(
+                        strong_inputs2,
+                        input_ids[noisy_mask2],
+                        attention_mask[noisy_mask2],
+                        aux_features=aux_features[noisy_mask2] if aux_features is not None else None,
+                        stop_gradient_heads=stop_gradient_heads,
+                    )
+                    fm_loss2_sam = self._fixmatch_loss(out2_sam, out2_strong_sam, noisy_mask2)
+                total_loss2_sam = _divide_loss_fn(out2_sam, out1, clean_mask2, noisy_mask2, self.elr2, labels_corrected) + fm_loss2_sam
                 total_loss2_sam.backward()
                 optimizer2.second_step(zero_grad=True)
             else:
@@ -1134,7 +1404,7 @@ class DivideMix:
             running_loss += 0.5 * (total_loss1.item() + total_loss2.item()) * batch_size
             total_samples += batch_size
 
-            # Accuracy from model1
+            # Accuracy from model1 (against original labels for fair metric)
             c, n = _compute_accuracy(out1, labels, accuracy_attributes)
             correct_total += c
             sample_total += n

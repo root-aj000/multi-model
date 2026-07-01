@@ -747,10 +747,17 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
             device=device,
             warmup_epochs=config.get("DIVIDEMIX_WARMUP_EPOCHS", 10),
             clean_threshold=config.get("DIVIDEMIX_CLEAN_THRESHOLD", 0.5),
-            lambda_u=config.get("DIVIDEMIX_LAMBDA_U", 25.0),
+            lambda_u=config.get("DIVIDEMIX_LAMBDA_U", 1.0),
             noise_rate=config.get("COTEACHING_NOISE_RATE", 0.2),
             beta_elr=elr_beta,
             elr_T=config.get("epochs", 100),
+            label_correction_enabled=config.get("LABEL_CORRECTION_ENABLED", True),
+            label_correction_ramp_epochs=config.get("LABEL_CORRECTION_RAMP_EPOCHS", 10),
+            label_correction_max_rate=config.get("LABEL_CORRECTION_MAX_RATE", 0.9),
+            label_correction_confidence_threshold=config.get("LABEL_CORRECTION_CONFIDENCE_THRESHOLD", 0.9),
+            fixmatch_enabled=config.get("FIXMATCH_ENABLED", True),
+            fixmatch_confidence_threshold=config.get("FIXMATCH_CONFIDENCE_THRESHOLD", 0.95),
+            fixmatch_loss_weight=config.get("FIXMATCH_LOSS_WEIGHT", 1.0),
         )
         # Reload train dataset with return_index=True for DivideMix
         train_dataset_idx, _ = load_datasets(config, aux_feature_columns)
