@@ -6,7 +6,6 @@ multi-attribute labels using the FG_MFN model.
 """
 
 import logging
-import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -128,12 +127,6 @@ def predict_image(
     clean_result["monetary_mention"] = extract_monetary_mention(raw_text) or ""
     clean_result["call_to_action"] = extract_call_to_action(raw_text) or ""
     clean_result["object_detected"] = _format_objects(extract_objects_mentioned(raw_text))
-
-    # target_audience is not predicted by the model (removed from training).
-    # Return a random age group as a placeholder.
-    clean_result["target_audience"] = random.choice(
-        ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"]
-    )
 
     return clean_result
 

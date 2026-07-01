@@ -108,12 +108,14 @@ def main() -> None:
     evaluation_results = evaluate_model(
         model, dataloader, device, text_max_length=text_max_length,
     )
+    accuracy_attributes = config.get("ACCURACY_ATTRIBUTES", None)
     metrics = compute_metrics(
         evaluation_results["all_preds"],
         evaluation_results["all_labels"],
         per_attr_preds=evaluation_results.get("per_attr_preds"),
         per_attr_labels=evaluation_results.get("per_attr_labels"),
         label_maps=label_maps,
+        accuracy_attributes=accuracy_attributes,
     )
     save_results(metrics, args.output)
 

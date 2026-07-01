@@ -137,12 +137,18 @@ def evaluate_model(
 # Metrics computation
 # ──────────────────────────────────────────────────────────────────────────────
 
+DEFAULT_ACCURACY_ATTRIBUTES = [
+    "theme", "sentiment", "emotion", "dominant_colour", "trust_safety",
+]
+
+
 def compute_metrics(
     all_preds:        List[int],
     all_labels:       List[int],
     per_attr_preds:   Optional[Dict[str, List[int]]] = None,
     per_attr_labels:  Optional[Dict[str, List[int]]] = None,
     label_maps:       Optional[Dict[str, List[str]]] = None,
+    accuracy_attributes: Optional[List[str]] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """
@@ -152,17 +158,24 @@ def compute_metrics(
     Issue 10 fix — reports per-attribute precision, recall, F1, and
                    confusion matrices using sklearn.
 
+    When accuracy_attributes is specified, only those attributes
+    contribute to accuracy_macro and accuracy_weighted. Per-attribute
+    results are still computed for ALL attributes.
+
     Args:
-        all_preds:       Flat prediction list (first attribute or legacy).
-        all_labels:      Flat label list (first attribute or legacy).
-        per_attr_preds:  Per-attribute prediction lists.
-        per_attr_labels: Per-attribute label lists.
-        label_maps:      Optional dict mapping attr_name → list of label
-                         strings. Used to name confusion matrix rows/cols.
+        all_preds:           Flat prediction list (first attribute or legacy).
+        all_labels:          Flat label list (first attribute or legacy).
+        per_attr_preds:      Per-attribute prediction lists.
+        per_attr_labels:     Per-attribute label lists.
+        label_maps:          Optional dict mapping attr_name → list of label
+                             strings. Used to name confusion matrix rows/cols.
+        accuracy_attributes: Optional list of attribute names to include in
+                             the primary accuracy metrics. If None, uses all
+                             available attributes.
 
     Returns:
         {
-          "accuracy_macro"    : float  — unweighted mean across attributes
+          "accuracy_macro"    : float  — unweighted mean across selected attrs
           "accuracy_weighted" : float  — sample-count-weighted mean
           "total"             : int    — total evaluation samples
           "per_attribute"     : {
@@ -204,6 +217,9 @@ def compute_metrics(
                 "Install with: pip install scikit-learn"
             )
             _sklearn_available = False
+
+        # Determine which attributes contribute to the primary accuracy metric
+        selected_for_accuracy = set(accuracy_attributes) if accuracy_attributes else None
 
         per_attr_results: Dict[str, Any] = {}
         acc_values:    List[float] = []
@@ -267,11 +283,12 @@ def compute_metrics(
                 attr_result["confusion_matrix"] = cm.tolist()
 
             per_attr_results[attr_name] = attr_result
-            acc_values.append(attr_acc)
 
-            # Accumulate for weighted average (Issue 9)
-            weighted_sum  += attr_acc * n
-            total_samples += n
+            # Only accumulate for attributes selected for primary accuracy
+            if selected_for_accuracy is None or attr_name in selected_for_accuracy:
+                acc_values.append(attr_acc)
+                weighted_sum  += attr_acc * n
+                total_samples += n
 
         # Issue 9: both macro and weighted accuracy
         macro_avg    = sum(acc_values) / len(acc_values) if acc_values else 0.0

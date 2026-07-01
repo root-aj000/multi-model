@@ -34,7 +34,11 @@ from lib.preprocessing.image.transforms import DEFAULT_IMAGE_SIZE, build_image_t
 from lib.preprocessing.text.cleaner import clean_text, clean_adcopy
 from lib.preprocessing.text.pipeline import build_text_pipeline
 from lib.preprocessing.text.tokenizer import load_tokenizer, tokenize_text
-from lib.utils.class_weights import compute_class_weights_from_csv, log_class_distribution
+from lib.utils.class_weights import (
+    compute_class_weights_from_csv,
+    compute_cooccurrence_prior,
+    log_class_distribution,
+)
 from lib.utils.config import get_dataset_paths, get_label_maps, load_config
 
 logger = logging.getLogger(__name__)
@@ -203,22 +207,19 @@ def create_data_loaders(
     return train_loader, val_loader
 
 
-def _build_optimizer(
+def _build_param_groups(
     model: torch.nn.Module,
     cfg: Dict[str, Any],
-) -> AdamW:
+) -> List[Dict[str, Any]]:
     """
-    Build an AdamW optimizer with separate learning-rate parameter groups.
+    Build parameter groups with per-group learning rates and weight_decay.
 
     The pretrained text encoder is fine-tuned at encoder_learning_rate
     (much lower than learning_rate for randomly initialised layers).
     Bias terms and normalization weights are excluded from weight decay
     following the standard BERT fine-tuning recipe.
 
-    BUG-02 FIX: AdamW is called WITHOUT a global weight_decay argument.
-    Each param group already has weight_decay set explicitly. Passing a
-    global value was redundant and could silently override the 0.0 entries
-    in the no-decay groups if PyTorch's behaviour ever changes.
+    BUG-02 FIX: Each param group already has weight_decay set explicitly.
 
     DataParallel note: when the model is wrapped with nn.DataParallel,
     named_parameters() adds a "module." prefix to all names. This function
@@ -230,13 +231,12 @@ def _build_optimizer(
         cfg:   Configuration dict with learning rate settings.
 
     Returns:
-        Configured AdamW optimizer.
+        List of parameter group dicts ready for an optimizer.
     """
     lr = cfg.get("learning_rate", _FALLBACK_LEARNING_RATE)
     encoder_lr = cfg.get("encoder_learning_rate", _FALLBACK_ENCODER_LEARNING_RATE)
     weight_decay = cfg.get("weight_decay", 1e-2)
 
-    # Parameters that must NOT have weight decay (standard BERT recipe)
     no_decay_suffixes = ("bias", "LayerNorm.weight", "layer_norm.weight")
 
     encoder_decay: List[torch.nn.Parameter] = []
@@ -247,8 +247,6 @@ def _build_optimizer(
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        # Strip DataParallel's "module." prefix so name matching works
-        # regardless of whether the model is wrapped or not.
         bare_name = name[len("module."):] if name.startswith("module.") else name
         is_encoder = bare_name.startswith("text_module.encoder")
         no_decay = any(bare_name.endswith(sfx) for sfx in no_decay_suffixes)
@@ -268,19 +266,124 @@ def _build_optimizer(
             {"params": encoder_no_decay, "lr": encoder_lr, "weight_decay": 0.0},
         ]
         logger.info(
-            "Optimizer: encoder (decay=%d, no_decay=%d) @ lr=%.2e; "
+            "Param groups: encoder (decay=%d, no_decay=%d) @ lr=%.2e; "
             "other (decay=%d, no_decay=%d) @ lr=%.2e",
             len(encoder_decay), len(encoder_no_decay), encoder_lr,
             len(other_decay), len(other_no_decay), lr,
         )
     else:
         logger.info(
-            "Optimizer: %d params @ lr=%.2e (no encoder params found)",
+            "Param groups: %d params @ lr=%.2e (no encoder params found)",
             len(other_decay) + len(other_no_decay), lr,
         )
 
-    # BUG-02 FIX: no global weight_decay — each group already has it set
+    return param_groups
+
+
+def _build_optimizer(
+    model: torch.nn.Module,
+    cfg: Dict[str, Any],
+) -> AdamW:
+    """Build an AdamW optimizer from model and config parameter groups."""
+    param_groups = _build_param_groups(model, cfg)
     return AdamW(param_groups)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SAM (Sharpness-Aware Minimization) Optimizer Wrapper
+# ──────────────────────────────────────────────────────────────────────────────
+
+class SAM(torch.optim.Optimizer):
+    """
+    Wraps a base optimizer with Sharpness-Aware Minimization.
+
+    SAM finds flatter minima by first taking a gradient ascent step
+    (perturbing weights in the direction of sharpest loss increase),
+    then computing the gradient at that perturbed point, and finally
+    applying the base optimizer's update from the original position.
+
+    Usage in training loop:
+        loss = criterion(model(x), y)
+        loss.backward()
+        optimizer.first_step(zero_grad=True)
+
+        loss = criterion(model(x), y)
+        loss.backward()
+        optimizer.second_step(zero_grad=True)
+
+    Reference:
+        Foret et al., "Sharpness-Aware Minimization for Efficiently
+        Improving Generalization" (ICLR 2021)
+    """
+
+    def __init__(
+        self,
+        params: Any,
+        base_optimizer: type,
+        rho: float = 0.05,
+        adaptive: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Args:
+            params:           Model parameters or parameter groups.
+            base_optimizer:   Optimizer class (e.g. AdamW, SGD).
+            rho:              Perturbation radius (neighborhood size).
+            adaptive:         If True, use ASAM (adaptive SAM) where the
+                              perturbation is scaled by |w| for each weight.
+            kwargs:           Arguments passed to the base optimizer.
+        """
+        defaults = dict(rho=rho, adaptive=adaptive, **kwargs)
+        super().__init__(params, defaults)
+
+        self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad: bool = False) -> None:
+        """Perturb weights along the gradient direction (ascent step)."""
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                self.state[p]["old_p"] = p.data.clone()
+                e_w = p.grad * scale
+                if group["adaptive"]:
+                    e_w *= torch.pow(p, 2)
+                p.add_(e_w)
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad: bool = False) -> None:
+        """Restore original weights and apply base optimizer step."""
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                p.data = self.state[p]["old_p"]
+        self.base_optimizer.step()
+        if zero_grad:
+            self.zero_grad()
+
+    def _grad_norm(self) -> torch.Tensor:
+        """Compute the L2 norm of all gradients combined."""
+        norm = torch.tensor(0.0, device=self.param_groups[0]["params"][0].device)
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is not None:
+                    norm += p.grad.norm() ** 2
+        return norm ** 0.5
+
+    def __repr__(self) -> str:
+        return (
+            f"SAM(base={self.base_optimizer.__class__.__name__}, "
+            f"rho={self.param_groups[0]['rho']}, "
+            f"adaptive={self.param_groups[0]['adaptive']})"
+        )
 
 
 def setup_training_components(
@@ -309,7 +412,20 @@ def setup_training_components(
     Returns:
         Dict with keys: optimizer, scheduler, criterion, mixup_alpha.
     """
-    optimizer = _build_optimizer(model, cfg)
+    param_groups = _build_param_groups(model, cfg)
+
+    use_sam = cfg.get("use_sam", False)
+    if use_sam:
+        sam_rho = cfg.get("sam_rho", 0.05)
+        optimizer = SAM(
+            param_groups, AdamW,
+            rho=sam_rho,
+            lr=cfg.get("learning_rate", _FALLBACK_LEARNING_RATE),
+            weight_decay=cfg.get("weight_decay", 1e-2),
+        )
+        logger.info("SAM optimizer enabled (rho=%.4f)", sam_rho)
+    else:
+        optimizer = AdamW(param_groups)
 
     epochs = cfg.get("epochs", 100)
     warmup_epochs = cfg.get("warmup_epochs", 0) or 0
@@ -414,6 +530,33 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
     # Training hyperparameters (lr, CLASS_WEIGHTS, etc.) must be at top level.
     model_cfg = config.get("model", config)
 
+    # If USE_GRAPH_HEADS is enabled, compute label co-occurrence prior from the
+    # training CSV and inject it into model_cfg so the GNN can use it as an
+    # attention bias. This is done before model creation.
+    if model_cfg.get("USE_GRAPH_HEADS", False):
+        label_maps_for_cooc = get_label_maps(config)
+        dataset_root_cooc = config.get("DATASET_ROOT") or config.get("dataset_root")
+        train_paths_cooc = get_dataset_paths("train", dataset_root_cooc)
+        train_csv_cooc = train_paths_cooc["csv"]
+        attr_names_cooc = [
+            n for n in [
+                "theme", "sentiment", "emotion", "dominant_colour",
+                "attention_score", "trust_safety",
+                "predicted_ctr", "likelihood_shares",
+            ]
+            if n in label_maps_for_cooc
+        ]
+        logger.info(
+            "USE_GRAPH_HEADS enabled — computing co-occurrence prior from %s",
+            train_csv_cooc,
+        )
+        cooc_prior = compute_cooccurrence_prior(train_csv_cooc, attr_names_cooc)
+        model_cfg = {**model_cfg, "COOCCURRENCE_PRIOR": cooc_prior.tolist()}
+        logger.info(
+            "Co-occurrence prior computed for %d attributes (shape: %s)",
+            len(attr_names_cooc), list(cooc_prior.shape),
+        )
+
     train_dataset, val_dataset = load_datasets(config)
     batch_size = config.get("batch_size", _FALLBACK_BATCH_SIZE)
     num_workers = min(
@@ -462,6 +605,11 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
     # at the top level are accessible (BUG-28 NOTE).
     components = setup_training_components(model, config, device)
 
+    accuracy_attrs_list = config.get("ACCURACY_ATTRIBUTES", [])
+    accuracy_attributes = set(accuracy_attrs_list) if accuracy_attrs_list else None
+    if accuracy_attributes:
+        logger.info("Accuracy attributes: %s", sorted(accuracy_attributes))
+
     return {
         "model": model,
         "train_loader": train_loader,
@@ -469,4 +617,5 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
         **components,
         "attribute_loss_weights": config.get("ATTRIBUTE_LOSS_WEIGHTS", {}),
         "stop_gradient_heads": set(config.get("STOP_GRADIENT_HEADS", [])),
+        "accuracy_attributes": accuracy_attributes,
     }

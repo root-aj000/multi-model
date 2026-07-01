@@ -84,21 +84,21 @@ def _get_criterion(criterion: Any, attr_name: str) -> Any:
 def _compute_accuracy(
     outputs: Any,
     labels: Any,
+    accuracy_attributes: Optional[set] = None,
 ) -> Tuple[int, int]:
     """
     Compute correct prediction count and total sample count.
 
     Returns (correct_count, total_count) for true sample-level
-    micro-average accuracy across all attribute heads.
-
-    Issue 4 note: during Mixup, this is called with labels_a (the dominant
-    label). The micro-average across heads is the right metric here — it
-    weights each head by its sample count, so heads with more classes don't
-    artificially drag down the number.
+    micro-average accuracy. When accuracy_attributes is set, only
+    those attributes contribute to the count — others are still
+    predicted but do not influece the primary accuracy metric.
 
     Args:
-        outputs: Model outputs — tensor or dict of tensors.
-        labels:  Ground-truth labels — tensor or dict of tensors.
+        outputs:            Model outputs — tensor or dict of tensors.
+        labels:             Ground-truth labels — tensor or dict of tensors.
+        accuracy_attributes: Optional set of attribute names to include in
+                            accuracy. If None, all attributes are used.
 
     Returns:
         (correct_count, total_count)
@@ -107,6 +107,8 @@ def _compute_accuracy(
         correct_total = 0
         sample_total  = 0
         for attr_name, logits in outputs.items():
+            if accuracy_attributes is not None and attr_name not in accuracy_attributes:
+                continue
             if isinstance(labels, dict) and attr_name in labels:
                 target = labels[attr_name]
             elif not isinstance(labels, dict):
@@ -160,6 +162,40 @@ def _compute_per_attribute_accuracy(
     return per_attr
 
 
+def _compute_loss(
+    outputs: Any,
+    labels_a: Any,
+    labels_b: Any,
+    lam: float,
+    criterion: Any,
+    attribute_loss_weights: Optional[Dict[str, float]] = None,
+) -> torch.Tensor:
+    if isinstance(outputs, dict) and isinstance(labels_a, dict):
+        return sum(
+            (attribute_loss_weights or {}).get(attr, 1.0) *
+            mixup_criterion(
+                _get_criterion(criterion, attr),
+                outputs[attr],
+                labels_a[attr],
+                labels_b[attr],
+                lam,
+            )
+            for attr in outputs if attr in labels_a
+        )
+    elif isinstance(outputs, dict):
+        return sum(
+            (attribute_loss_weights or {}).get(attr, 1.0) *
+            mixup_criterion(
+                _get_criterion(criterion, attr),
+                logits, labels_a, labels_b, lam,
+            )
+            for attr, logits in outputs.items()
+        )
+    return mixup_criterion(
+        _get_criterion(criterion, ""), outputs, labels_a, labels_b, lam,
+    )
+
+
 def train_epoch(
     model: torch.nn.Module,
     loader: DataLoader,
@@ -170,28 +206,27 @@ def train_epoch(
     text_max_length: int = 256,
     attribute_loss_weights: Optional[Dict[str, float]] = None,
     stop_gradient_heads: Optional[set] = None,
+    accuracy_attributes: Optional[set] = None,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one training epoch.
 
     Args:
-        model:           The model to train.
-        loader:          DataLoader for training data.
-        criterion:       Loss function or dict of per-attribute losses.
-        optimizer:       Optimizer.
-        device:          Compute device.
-        mixup_alpha:     Mixup alpha. 0 disables Mixup.
-        text_max_length: Fallback sequence length when batch has no text.
-                         Must match text_max_length in config.
+        model:                The model to train.
+        loader:               DataLoader for training data.
+        criterion:            Loss function or dict of per-attribute losses.
+        optimizer:            Optimizer.
+        device:               Compute device.
+        mixup_alpha:          Mixup alpha. 0 disables Mixup.
+        text_max_length:      Fallback sequence length when batch has no text.
+                              Must match text_max_length in config.
         attribute_loss_weights: Optional dict mapping attribute name to a
-                         scalar multiplier applied to that head's loss before
-                         summing. Downweight noisy heads (predicted_ctr,
-                         likelihood_shares, attention_score) to prevent their
-                         gradients from corrupting the shared representation.
-        stop_gradient_heads: Optional set of attribute names whose gradients
-                         are detached from shared features. The heads still
-                         compute forward pass and train their own weights,
-                         but do not corrupt the shared representation.
+                              scalar multiplier applied to that head's loss.
+        stop_gradient_heads:  Optional set of attribute names whose gradients
+                              are detached from shared features.
+        accuracy_attributes:  Optional set of attribute names to include in
+                              the primary accuracy metric. Per-attribute
+                              accuracy is still computed for all heads.
 
     Returns:
         (average_loss, accuracy) for the epoch.
@@ -226,44 +261,30 @@ def train_epoch(
             labels_b = labels
             lam = 1.0
 
+        use_sam = hasattr(optimizer, 'first_step')
+
+        # ── SAM first step ──────────────────────────────────────────────
         optimizer.zero_grad()
         outputs = model(inputs, input_ids, attention_mask, stop_gradient_heads=stop_gradient_heads)
-
-        if isinstance(outputs, dict) and isinstance(labels_a, dict):
-            loss = sum(
-                (attribute_loss_weights or {}).get(attr, 1.0) *
-                mixup_criterion(
-                    _get_criterion(criterion, attr),
-                    outputs[attr],
-                    labels_a[attr],
-                    labels_b[attr],
-                    lam,
-                )
-                for attr in outputs if attr in labels_a
-            )
-        elif isinstance(outputs, dict):
-            loss = sum(
-                (attribute_loss_weights or {}).get(attr, 1.0) *
-                mixup_criterion(
-                    _get_criterion(criterion, attr),
-                    logits, labels_a, labels_b, lam,
-                )
-                for attr, logits in outputs.items()
-            )
-        else:
-            loss = mixup_criterion(
-                _get_criterion(criterion, ""), outputs, labels_a, labels_b, lam,
-            )
-
+        loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+
+        if use_sam:
+            optimizer.first_step(zero_grad=True)
+            # Second forward pass at perturbed weights
+            outputs = model(inputs, input_ids, attention_mask, stop_gradient_heads=stop_gradient_heads)
+            loss = _compute_loss(outputs, labels_a, labels_b, lam, criterion, attribute_loss_weights)
+            loss.backward()
+            optimizer.second_step(zero_grad=True)
+        else:
+            optimizer.step()
 
         running_loss  += loss.item() * batch_size
         total_samples += batch_size
 
-        # Micro-average accuracy (BUG-04 FIX: use labels_a, the dominant label)
-        c, n = _compute_accuracy(outputs, labels_a)
+        # Micro-average accuracy over selected attributes (BUG-04 FIX: use labels_a)
+        c, n = _compute_accuracy(outputs, labels_a, accuracy_attributes)
         correct_total += c
         sample_total  += n
 
@@ -293,16 +314,19 @@ def validate_epoch(
     criterion: Any,
     device: torch.device,
     text_max_length: int = 256,
+    accuracy_attributes: Optional[set] = None,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one validation epoch.
 
     Args:
-        model:           The model to evaluate.
-        loader:          DataLoader for validation data.
-        criterion:       Loss function or dict of per-attribute losses.
-        device:          Compute device.
-        text_max_length: Fallback sequence length when batch has no text.
+        model:               The model to evaluate.
+        loader:              DataLoader for validation data.
+        criterion:           Loss function or dict of per-attribute losses.
+        device:              Compute device.
+        text_max_length:     Fallback sequence length when batch has no text.
+        accuracy_attributes: Optional set of attribute names to include in
+                             the primary accuracy metric.
 
     Returns:
         (average_loss, accuracy) for the epoch.
@@ -346,7 +370,7 @@ def validate_epoch(
             running_loss  += loss.item() * batch_size
             total_samples += batch_size
 
-            c, n = _compute_accuracy(outputs, labels)
+            c, n = _compute_accuracy(outputs, labels, accuracy_attributes)
             correct_total += c
             sample_total  += n
 

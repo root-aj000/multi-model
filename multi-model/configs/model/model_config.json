@@ -91,8 +91,29 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
-  "DROPOUT": 0.5,
-  "_comment_DROPOUT": "Raised from 0.4 → 0.5. Train/val loss gap growing (+0.68 at ep9) indicates overfitting. Stronger dropout regularises all 8 heads.",
+  "USE_GRAPH_HEADS": false,
+  "_comment_USE_GRAPH_HEADS": [
+    "If true, replaces independent per-attribute heads with an",
+    "AttributeCooccurrenceGraph — a GNN over attribute nodes that",
+    "propagates information between correlated attributes via learned",
+    "self-attention. A label co-occurrence prior (NMI) is used as an",
+    "attention bias so that semantic heads (theme, emotion, etc.)",
+    "share signal with noisy heads (attention_score, predicted_ctr, etc.).",
+    "Set to true to allow noisy heads to borrow signal from semantic ones.",
+    "Requires GRAPH_HEADS config below."
+  ],
+
+  "GRAPH_HEADS": {
+    "D_NODE": 128,
+    "_comment_D_NODE": "Dimension of each attribute node's embedding.",
+    "N_LAYERS": 2,
+    "_comment_N_LAYERS": "Number of graph attention (TransformerEncoder) layers.",
+    "N_HEADS": 4,
+    "_comment_N_HEADS": "Number of attention heads per layer. Must divide D_NODE."
+  },
+
+  "DROPOUT": 0.3,
+  "_comment_DROPOUT": "Reduced from 0.5 → 0.3. SAM provides complementary flat-minima regularisation, so explicit dropout can be loosened to let more signal flow through the GNN heads.",
 
   "FREEZE_BACKBONE": true,
   "_comment_FREEZE_BACKBONE": [
@@ -120,7 +141,8 @@
     "attention_score": 0.05,
     "trust_safety": 1.5,
     "predicted_ctr": 0.05,
-    "likelihood_shares": 0.05
+    "likelihood_shares": 0.05,
+    "target_audience": 0.8
   },
   "_comment_ATTRIBUTE_LOSS_WEIGHTS": [
     "Per-attribute multiplier applied to each head's CrossEntropyLoss before summing.",
@@ -128,6 +150,8 @@
     "be learned from image+text content (Cramér's V ≈ 0.02–0.04).",
     "Reduced from 0.1 → 0.05 to further silence gradient noise from these heads,",
     "letting the semantic heads (sentiment, emotion, trust_safety) dominate training.",
+    "target_audience (6 age groups) has moderate content correlation but benefits from",
+    "slightly higher weight than the noise heads, yet lower than pure semantic heads.",
     "Used by train_epoch in train_model.py — see ATTRIBUTE_LOSS_WEIGHTS key."
   ],
 
@@ -188,6 +212,26 @@
   "learning_rate": 1e-4,
   "_comment_learning_rate": "LR for randomly initialised layers (heads, projection, shared FC). Reduced from 2e-4 → 1e-4: slower learning reduces overfitting on small dataset.",
 
+  "use_sam": true,
+  "_comment_use_sam": [
+    "If true, wraps the optimizer with Sharpness-Aware Minimization.",
+    "SAM perturbs weights toward a sharper loss region, then updates from",
+    "the original position using the gradient at the perturbed point.",
+    "This encourages flatter minima that generalise better — especially",
+    "important with only ~5k training samples.",
+    "Typically provides +2-5% accuracy at no inference cost.",
+    "Reference: Foret et al., ICLR 2021"
+  ],
+
+  "sam_rho": 0.05,
+  "_comment_sam_rho": [
+    "SAM perturbation radius (neighbourhood size).",
+    "Typical values: 0.02 (small perturbation) to 0.1 (large).",
+    "0.05 is the default from the SAM paper and works well with AdamW.",
+    "Large rho → stronger regularisation, may underfit.",
+    "Small rho → weaker regularisation, may overfit."
+  ],
+
   "encoder_learning_rate": 1.5e-5,
   "_comment_encoder_learning_rate": [
     "LR for the pretrained text encoder (text_module.encoder).",
@@ -195,10 +239,11 @@
     "Raised from 5e-6 → 2e-5: the encoder was barely fine-tuning at 5e-6."
   ],
 
-  "weight_decay": 0.02,
+  "weight_decay": 0.01,
   "_comment_weight_decay": [
     "L2 regularisation applied to non-bias, non-LayerNorm parameters.",
-    "Raised from 0.01 → 0.02: stronger regularisation to close the train/val gap.",
+    "Reduced from 0.02 → 0.01: SAM's flat-minima regularisation replaces",
+    "some of the burden previously placed on explicit weight decay.",
     "Bias and LayerNorm weights always have weight_decay=0 (standard BERT recipe).",
     "BUG-02 FIX: no longer passed as a global AdamW arg (was redundant)."
   ],
@@ -243,11 +288,12 @@
     "Standard image augmentation (already configured) is sufficient."
   ],
 
-  "label_smoothing": 0.25,
+  "label_smoothing": 0.1,
   "_comment_label_smoothing": [
-    "Raised from 0.2 → 0.25. Val loss plateaued since ep5 while train loss kept dropping.",
-    "0.25 smoothing redistributes 25% of probability mass uniformly, preventing overconfident predictions.",
-    "Typical values: 0.05–0.25. Higher = stronger regularisation."
+    "Reduced from 0.25 → 0.1: SAM provides the regularisation that label smoothing",
+    "previously handled. Lower smoothing means the model can assign more probability",
+    "mass to the correct class, improving gradient signal for the semantic heads.",
+    "Typical values: 0.05–0.25. 0.1 is a balanced middle ground with SAM active."
   ],
 
   "early_stopping_patience": 10,
@@ -383,6 +429,17 @@
 
   "_comment_attributes": "=== CLASSIFICATION ATTRIBUTES ===",
 
+  "_comment_accuracy": "=== ACCURACY METRIC ===",
+
+  "ACCURACY_ATTRIBUTES": ["theme", "sentiment", "emotion", "dominant_colour", "trust_safety"],
+  "_comment_ACCURACY_ATTRIBUTES": [
+    "List of attribute names to include in the primary accuracy metric.",
+    "Only these attributes contribute to the overall 'accuracy' reported",
+    "during training and evaluation. Per-attribute accuracy is still",
+    "computed for ALL attributes individually.",
+    "Set to [] to include all attributes in accuracy."
+  ],
+
   "ATTRIBUTES": {
     "theme": {
       "num_classes": 9,
@@ -415,6 +472,10 @@
     "likelihood_shares": {
       "num_classes": 3,
       "labels": ["High", "Low", "Medium"]
+    },
+    "target_audience": {
+      "num_classes": 6,
+      "labels": ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"]
     }
   }
 }

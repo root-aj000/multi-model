@@ -23,6 +23,9 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import numpy as np
+import torch
+
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -101,6 +104,71 @@ def compute_class_weights_from_csv(
         )
 
     return result
+
+
+def compute_cooccurrence_prior(
+    csv_path: Path,
+    attr_names: List[str],
+) -> torch.Tensor:
+    """
+    Compute pairwise attribute co-occurrence as an attention bias prior.
+
+    For each pair of attributes, computes normalized mutual information
+    (NMI) between the label assignments. NMI ∈ [0, 1] where 1 means the
+    two attributes are perfectly correlated (knowing one tells you the
+    other) and 0 means they are independent.
+
+    The result is a symmetric (N_ATTRS, N_ATTRS) matrix used as an
+    additive attention bias in AttributeCooccurrenceGraph — strongly
+    correlated attributes attend to each other more.
+
+    Args:
+        csv_path:   Path to the training CSV file.
+        attr_names: Ordered list of attribute names (node order).
+
+    Returns:
+        (N, N) float tensor with values in [0, 1]. Diagonal is 1.
+    """
+    if not Path(csv_path).exists():
+        raise FileNotFoundError(f"Training CSV not found: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    n = len(attr_names)
+    prior = torch.eye(n)
+
+    for i, attr_i in enumerate(attr_names):
+        for j, attr_j in enumerate(attr_names):
+            if i >= j:
+                continue
+            if attr_i not in df.columns or attr_j not in df.columns:
+                continue
+
+            # Build contingency table
+            crosstab = pd.crosstab(df[attr_i], df[attr_j])
+            contingency = crosstab.values
+            if contingency.size == 0:
+                continue
+
+            # Compute mutual information
+            contingency = contingency.astype(float)
+            total = contingency.sum()
+            p_xy = contingency / total
+            p_x = p_xy.sum(axis=1, keepdims=True)
+            p_y = p_xy.sum(axis=0, keepdims=True)
+            p_xy = np.maximum(p_xy, 1e-12)
+            p_x = np.maximum(p_x, 1e-12)
+            p_y = np.maximum(p_y, 1e-12)
+            mi = (p_xy * (np.log(p_xy) - np.log(p_x) - np.log(p_y))).sum()
+
+            # Normalize by joint entropy → NMI in [0, 1]
+            h_x = -(p_x * np.log(np.maximum(p_x, 1e-12))).sum()
+            h_y = -(p_y * np.log(np.maximum(p_y, 1e-12))).sum()
+            nmi = 2 * mi / (h_x + h_y) if (h_x + h_y) > 0 else 0.0
+
+            prior[i, j] = nmi
+            prior[j, i] = nmi
+
+    return prior
 
 
 def log_class_distribution(

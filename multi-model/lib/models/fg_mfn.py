@@ -63,6 +63,7 @@ import logging
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -76,6 +77,11 @@ ATTRIBUTE_NAMES = [
     "theme", "sentiment", "emotion", "dominant_colour",
     "attention_score", "trust_safety",
     "predicted_ctr", "likelihood_shares",
+    "target_audience",
+]
+
+CORE_ATTRIBUTES = [
+    "theme", "sentiment", "emotion", "dominant_colour", "trust_safety",
 ]
 
 DEFAULT_NUM_CLASSES = 2
@@ -209,6 +215,142 @@ class CrossModalAttention(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Attribute Co-occurrence Graph Network
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AttributeCooccurrenceGraph(nn.Module):
+    """
+    Graph over attribute nodes with learned label co-occurrence bias.
+
+    Each attribute is a node. Initial node embeddings are computed from the
+    shared feature via per-attribute MLPs. A TransformerEncoder (self-attention)
+    allows nodes to exchange messages through the graph. A pre-computed label
+    co-occurrence prior (normalised mutual information) is added as an attention
+    bias so that strongly correlated attributes (e.g. sentiment ↔ emotion)
+    influence each other more than uncorrelated ones.
+
+    This allows noisy heads (attention_score, predicted_ctr, likelihood_shares)
+    to borrow signal from semantic heads (theme, emotion, etc.) through the
+    graph structure, even when their direct features are weak.
+
+    Dimensions:
+        Input:  shared (B, HIDDEN_DIM)
+        Output: Dict[attr_name -> (B, num_classes)]
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        attr_names: List[str],
+        attr_num_classes: Dict[str, int],
+        dropout: float = 0.3,
+        d_node: int = 128,
+        n_layers: int = 2,
+        n_heads: int = 4,
+        cooc_prior: Optional[torch.Tensor] = None,
+    ) -> None:
+        """
+        Args:
+            hidden_dim:      Output dimension of the shared FC layer.
+            attr_names:      Ordered list of attribute names (node order).
+            attr_num_classes: Dict mapping attr_name -> number of classes.
+            dropout:         Dropout probability.
+            d_node:          Dimension of each node's embedding.
+            n_layers:        Number of graph attention layers.
+            n_heads:         Number of attention heads per layer.
+            cooc_prior:      (N, N) pre-computed co-occurrence matrix. Values
+                             in [0, 1] representing normalised mutual information
+                             between each pair of attributes. Used as additive
+                             attention bias. If None, no bias is applied.
+        """
+        super().__init__()
+        self.attr_names = attr_names
+        self.n_attrs = len(attr_names)
+        self.d_node = d_node
+
+        if n_heads < 1:
+            raise ValueError(f"n_heads must be >= 1, got {n_heads}")
+        if d_node % n_heads != 0:
+            raise ValueError(f"d_node ({d_node}) must be divisible by n_heads ({n_heads})")
+
+        # Per-attribute MLPs to project shared features → node embeddings
+        self.node_mlps = nn.ModuleDict()
+        for name in attr_names:
+            self.node_mlps[name] = nn.Sequential(
+                nn.Linear(hidden_dim, d_node),
+                nn.GELU(),
+                nn.Dropout(dropout),
+            )
+
+        # Register co-occurrence prior as attention bias buffer
+        if cooc_prior is not None:
+            if isinstance(cooc_prior, np.ndarray):
+                cooc_prior = torch.from_numpy(cooc_prior)
+            self.register_buffer("cooc_bias", cooc_prior.float())
+        else:
+            self.register_buffer("cooc_bias", None)
+
+        # Graph attention layers (Transformer encoder-style)
+        self.layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        for _ in range(n_layers):
+            self.layers.append(
+                nn.MultiheadAttention(
+                    embed_dim=d_node,
+                    num_heads=n_heads,
+                    dropout=dropout,
+                    batch_first=True,
+                )
+            )
+            self.norms.append(nn.LayerNorm(d_node))
+
+        # Final per-attribute classifiers from updated node embeddings
+        self.classifiers = nn.ModuleDict()
+        for name in attr_names:
+            n_cls = attr_num_classes.get(name, DEFAULT_NUM_CLASSES)
+            self.classifiers[name] = nn.Linear(d_node, n_cls)
+
+        logger.info(
+            "AttributeCooccurrenceGraph: %d attributes, d_node=%d, "
+            "layers=%d, heads=%d, cooc_bias=%s",
+            self.n_attrs, d_node, n_layers, n_heads,
+            "yes" if cooc_prior is not None else "no",
+        )
+
+    def forward(self, shared: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            shared: (B, HIDDEN_DIM) shared feature vector.
+
+        Returns:
+            Dict[attr_name -> (B, num_classes) logit tensor].
+        """
+        B = shared.size(0)
+        device = shared.device
+
+        # Project to initial node embeddings: stack as (B, N, D)
+        nodes = torch.stack(
+            [self.node_mlps[name](shared) for name in self.attr_names],
+            dim=1,
+        )
+
+        # Graph attention layers with residual connections
+        for attn, norm in zip(self.layers, self.norms):
+            attn_out, _ = attn(
+                query=nodes, key=nodes, value=nodes,
+                attn_mask=self.cooc_bias,  # (N, N) → broadcast over batch
+                need_weights=False,
+            )
+            nodes = norm(nodes + attn_out)
+
+        # Per-attribute logits from updated node embeddings
+        return {
+            name: self.classifiers[name](nodes[:, i, :])
+            for i, name in enumerate(self.attr_names)
+        }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # FG_MFN
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -305,8 +447,37 @@ class FG_MFN(nn.Module):
         )
 
         # ── Per-attribute classification heads ──────────────────────────────
+        self.use_graph_heads = cfg.get("USE_GRAPH_HEADS", False)
         self.attribute_heads = nn.ModuleDict()
-        if "ATTRIBUTES" in cfg:
+
+        if self.use_graph_heads:
+            attr_names = [
+                n for n in ATTRIBUTE_NAMES
+                if "ATTRIBUTES" in cfg and n in cfg["ATTRIBUTES"]
+            ]
+            attr_num_classes = {
+                n: cfg["ATTRIBUTES"][n]["num_classes"]
+                for n in attr_names
+            }
+            gh_cfg = cfg.get("GRAPH_HEADS", {})
+            cooc_raw = cfg.get("COOCCURRENCE_PRIOR")
+            if cooc_raw is not None:
+                cooc_tensor = torch.tensor(cooc_raw, dtype=torch.float32)
+            else:
+                cooc_tensor = None
+
+            self.graph_heads = AttributeCooccurrenceGraph(
+                hidden_dim=hidden_dim,
+                attr_names=attr_names,
+                attr_num_classes=attr_num_classes,
+                dropout=dropout,
+                d_node=gh_cfg.get("D_NODE", 128),
+                n_layers=gh_cfg.get("N_LAYERS", 2),
+                n_heads=gh_cfg.get("N_HEADS", 4),
+                cooc_prior=cooc_tensor,
+            )
+            logger.info("Using AttributeCooccurrenceGraph for %d attributes", len(attr_names))
+        elif "ATTRIBUTES" in cfg:
             self._create_multi_attribute_heads(cfg, hidden_dim)
         else:
             logger.warning("No ATTRIBUTES in config — using legacy single-head mode")
@@ -423,7 +594,10 @@ class FG_MFN(nn.Module):
         # Shared FC
         shared = self.shared_fc(fused)  # (B, hidden_dim)
 
-        # Per-attribute classification
+        # Per-attribute classification (graph or independent heads)
+        if self.use_graph_heads:
+            return self.graph_heads(shared)
+
         results = {}
         for name, head in self.attribute_heads.items():
             if stop_gradient_heads and name in stop_gradient_heads:
