@@ -1088,7 +1088,8 @@ class DivideMix:
                 unsup = torch.tensor(0.0, device=device)
                 if noisy_mask.any():
                     out_noisy = {k: v[noisy_mask] for k, v in out_a.items()}
-                    out_b_for = {k: v[noisy_mask] for k, v in out_b.detach().items()}
+                    out_b_detached = {k: v.detach() for k, v in out_b.items()}
+                    out_b_for = {k: v[noisy_mask] for k, v in out_b_detached.items()}
                     for attr in out_noisy:
                         if attr not in out_b_for:
                             continue
