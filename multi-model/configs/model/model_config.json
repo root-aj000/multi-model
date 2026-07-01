@@ -449,6 +449,9 @@
   },
   "_comment_UDA_TEXT_AUG_CONFIG": "Hyperparameters for text augmentation. method can be 'back_translate' or 'bert_mask'.",
 
+  "checkpoint_interval": 5,
+  "_comment_checkpoint_interval": "Save a full resumable checkpoint every N epochs (in addition to best/last model saves). resume.pt and resume_latest.pt are always saved.",
+
   "early_stopping_patience": 10,
   "_comment_early_stopping_patience": [
     "Stop training if val accuracy does not improve for this many consecutive epochs.",

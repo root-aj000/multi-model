@@ -24,6 +24,8 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import functional as TF
 from torchvision.transforms import v2 as T
 
+from tqdm import tqdm
+
 from lib.utils.losses import FocalLoss, GCELoss
 
 logger = logging.getLogger(__name__)
@@ -360,6 +362,7 @@ def train_epoch(
     l2rw: Optional[L2RW] = None,
     meta_weight_trainer: Optional[MetaWeightNetTrainer] = None,
     mwn: Optional[MetaWeightNet] = None,
+    progress_bar: bool = True,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one training epoch.
@@ -408,7 +411,8 @@ def train_epoch(
 
     use_meta_weights = l2rw is not None or meta_weight_trainer is not None
 
-    for batch in loader:
+    loader_iter = tqdm(loader, desc=f"Train Epoch {epoch}", leave=False, disable=not progress_bar) if progress_bar else loader
+    for batch in loader_iter:
         # Check if batch includes sample indices (last element, for ELR or meta-weights)
         has_indices = (elr is not None or use_meta_weights) and isinstance(batch[-1], torch.Tensor) and batch[-1].dim() == 1
         indices = batch[-1].to(device) if has_indices else None
@@ -490,6 +494,12 @@ def train_epoch(
             per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * batch_n)
             per_attr_total[attr_name]   = per_attr_total.get(attr_name, 0)   + batch_n
 
+        if progress_bar:
+            loader_iter.set_postfix(loss=loss.item(), acc=c / n if n > 0 else 0.0)
+
+    if progress_bar:
+        loader_iter.close()
+
     avg_loss = running_loss / total_samples if total_samples > 0 else 0.0
     accuracy = correct_total / sample_total if sample_total > 0 else 0.0
 
@@ -512,6 +522,7 @@ def validate_epoch(
     text_max_length: int = 256,
     accuracy_attributes: Optional[set] = None,
     use_tta: bool = False,
+    progress_bar: bool = True,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Run one validation epoch.
@@ -526,6 +537,7 @@ def validate_epoch(
                              the primary accuracy metric.
         use_tta:             If True, apply test-time augmentation (horizontal
                              flip) and average predictions.
+        progress_bar:        If True, show a tqdm progress bar.
 
     Returns:
         (average_loss, accuracy) for the epoch.
@@ -538,8 +550,10 @@ def validate_epoch(
     per_attr_correct: Dict[str, int] = {}
     per_attr_total:   Dict[str, int] = {}
 
+    loader_iter = tqdm(loader, desc=f"Val Epoch", leave=False, disable=not progress_bar) if progress_bar else loader
+
     with torch.no_grad():
-        for batch in loader:
+        for batch in loader_iter:
             inputs = batch[0].to(device)
             labels = _move_labels_to_device(batch[1], device)
 
@@ -594,6 +608,12 @@ def validate_epoch(
                 batch_n = labels[attr_name].size(0) if isinstance(labels, dict) else batch_size
                 per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * batch_n)
                 per_attr_total[attr_name]   = per_attr_total.get(attr_name, 0)   + batch_n
+
+            if progress_bar:
+                loader_iter.set_postfix(loss=loss.item(), acc=c / n if n > 0 else 0.0)
+
+    if progress_bar:
+        loader_iter.close()
 
     avg_loss = running_loss / total_samples if total_samples > 0 else 0.0
     accuracy = correct_total / sample_total if sample_total > 0 else 0.0
@@ -669,6 +689,7 @@ def train_epoch_coteaching(
     stop_gradient_heads: Optional[set] = None,
     accuracy_attributes: Optional[set] = None,
     loss_truncation: Optional[Dict[str, float]] = None,
+    progress_bar: bool = True,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
     Co-teaching training epoch (Han et al. NeurIPS 2018).
@@ -729,7 +750,8 @@ def train_epoch_coteaching(
     has_sam1 = hasattr(optimizer1, 'first_step')
     has_sam2 = hasattr(optimizer2, 'first_step')
 
-    for batch in loader:
+    loader_iter = tqdm(loader, desc=f"CoTeach Epoch {epoch}", leave=False, disable=not progress_bar) if progress_bar else loader
+    for batch in loader_iter:
         indices = batch[-1].to(device)
         batch = batch[:-1]
 
@@ -826,6 +848,12 @@ def train_epoch_coteaching(
             batch_n = labels_a[attr_name].size(0) if isinstance(labels_a, dict) else batch_size
             per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * batch_n)
             per_attr_total[attr_name] = per_attr_total.get(attr_name, 0) + batch_n
+
+        if progress_bar:
+            loader_iter.set_postfix(loss=avg_loss, acc=c / n if n > 0 else 0.0)
+
+    if progress_bar:
+        loader_iter.close()
 
     avg_loss = running_loss / total_samples if total_samples > 0 else 0.0
     accuracy = correct_total / sample_total if sample_total > 0 else 0.0
@@ -1179,6 +1207,7 @@ class DivideMix:
         accuracy_attributes: Optional[set] = None,
         loss_truncation: Optional[Dict[str, float]] = None,
         verbose: bool = False,
+        progress_bar: bool = True,
     ) -> Tuple[float, float, Dict[str, float]]:
         """
         Run one DivideMix training epoch.
@@ -1197,6 +1226,7 @@ class DivideMix:
             stop_gradient_heads: Optional set of attribute names to detach.
             accuracy_attributes: Optional set for primary accuracy metric.
             verbose:           If True, log GMM split sizes.
+            progress_bar:      If True, show a tqdm progress bar.
 
         Returns:
             (average_loss, accuracy) for the epoch.
@@ -1213,7 +1243,8 @@ class DivideMix:
 
         is_warmup = epoch <= self.warmup_epochs
 
-        for batch in loader:
+        loader_iter = tqdm(loader, desc=f"DivideMix Epoch {epoch}", leave=False, disable=not progress_bar) if progress_bar else loader
+        for batch in loader_iter:
             indices = batch[-1].to(device)
             batch = batch[:-1]
 
@@ -1283,6 +1314,11 @@ class DivideMix:
                     bn = labels[attr_name].size(0) if isinstance(labels, dict) else batch_size
                     per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * bn)
                     per_attr_total[attr_name] = per_attr_total.get(attr_name, 0) + bn
+
+                if progress_bar:
+                    c_curr, n_curr = _compute_accuracy(out1, labels, accuracy_attributes)
+                    loader_iter.set_postfix(loss=running_loss / total_samples if total_samples > 0 else 0.0,
+                                            acc=c_curr / n_curr if n_curr > 0 else 0.0)
                 continue
 
             # ── Divide phase: forward pass both models ──
@@ -1450,6 +1486,14 @@ class DivideMix:
                 bn = labels[attr_name].size(0) if isinstance(labels, dict) else batch_size
                 per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * bn)
                 per_attr_total[attr_name] = per_attr_total.get(attr_name, 0) + bn
+
+            if progress_bar:
+                c_curr, n_curr = _compute_accuracy(out1, labels, accuracy_attributes)
+                loader_iter.set_postfix(loss=running_loss / total_samples if total_samples > 0 else 0.0,
+                                        acc=c_curr / n_curr if n_curr > 0 else 0.0)
+
+        if progress_bar:
+            loader_iter.close()
 
         avg_loss = running_loss / total_samples if total_samples > 0 else 0.0
         accuracy = correct_total / sample_total if sample_total > 0 else 0.0
@@ -1882,6 +1926,7 @@ class MultiModelCoTrain:
             optimizers: Tuple of N optimizers.
             epoch:      Current 1-indexed epoch number.
             num_epochs: Total epochs (for rate decay in small-loss selection).
+            progress_bar: If True, show a tqdm progress bar.
 
         Returns:
             (avg_loss, accuracy, per_attr_acc_log)
@@ -1901,6 +1946,7 @@ class MultiModelCoTrain:
 
         # Zip iterators over all model loaders
         loaders_iters = [iter(loader) for loader in loaders]
+        pbar = tqdm(desc=f"MCT Epoch {epoch}", leave=False, disable=not progress_bar)
 
         while True:
             # Fetch one batch per model (or same batch if same loader)
@@ -2130,6 +2176,14 @@ class MultiModelCoTrain:
                 bn = labels[attr_name].size(0) if isinstance(labels, dict) else batch_size
                 per_attr_correct[attr_name] = per_attr_correct.get(attr_name, 0) + int(attr_acc * bn)
                 per_attr_total[attr_name] = per_attr_total.get(attr_name, 0) + bn
+
+            if progress_bar:
+                pbar.update(1)
+                pbar.set_postfix(loss=running_loss / total_samples if total_samples > 0 else 0.0,
+                                 acc=correct_total / sample_total if sample_total > 0 else 0.0)
+
+        if progress_bar:
+            pbar.close()
 
         avg_loss = running_loss / total_samples if total_samples > 0 else 0.0
         accuracy = correct_total / sample_total if sample_total > 0 else 0.0

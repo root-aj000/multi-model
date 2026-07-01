@@ -13,7 +13,7 @@ import os
 import re
 from collections import deque
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -28,6 +28,7 @@ from use_cases.training.train_model import (
     train_epoch,
     train_epoch_coteaching,
     validate_epoch,
+    DivideMix,
     L2RW,
     MetaWeightNet,
     MetaWeightNetTrainer,
@@ -175,6 +176,152 @@ def _prune_best_checkpoints(save_dir: Path, keep: int = 2) -> None:
             logger.warning("Failed to remove checkpoint %s: %s", path, exc)
 
 
+SAVE_DIR = Path("saved_models")
+RESUME_CKPT = SAVE_DIR / "resume.pt"
+
+
+def _collect_divide_mix_state(dm: Optional[DivideMix]) -> Optional[Dict[str, Any]]:
+    if dm is None:
+        return None
+    return {
+        "loss_history": {k: v.cpu() for k, v in dm.loss_history.items()},
+        "correction_label": {k: v.cpu() for k, v in dm.correction_label.items()},
+        "correction_confidence": {k: v.cpu() for k, v in dm.correction_confidence.items()},
+        "elr1_ema": {k: v.cpu() for k, v in dm.elr1.ema.items()},
+        "elr2_ema": {k: v.cpu() for k, v in dm.elr2.ema.items()},
+        "_gmm_cache": {},  # Don't persist GMM cache — recomputed on resume
+    }
+
+
+def _restore_divide_mix_state(dm: DivideMix, state: Optional[Dict[str, Any]], device: torch.device) -> None:
+    if dm is None or state is None:
+        return
+    for k, v in state["loss_history"].items():
+        dm.loss_history[k] = v.to(device)
+    for k, v in state["correction_label"].items():
+        dm.correction_label[k] = v.to(device)
+    for k, v in state["correction_confidence"].items():
+        dm.correction_confidence[k] = v.to(device)
+    for k, v in state["elr1_ema"].items():
+        dm.elr1.ema[k] = v.to(device)
+    for k, v in state["elr2_ema"].items():
+        dm.elr2.ema[k] = v.to(device)
+    dm._gmm_cache.clear()
+
+
+def _collect_multico_state(
+    mct: Optional[MultiModelCoTrain],
+) -> Optional[Dict[str, Any]]:
+    if mct is None:
+        return None
+    state: Dict[str, Any] = {
+        "loss_histories": {k: v.cpu() for k, v in mct.loss_histories.items()},
+    }
+    elr_emas: Dict[str, Dict[str, torch.Tensor]] = {}
+    for key, elr_obj in mct.elr_objs.items():
+        elr_emas[key] = {k: v.cpu() for k, v in elr_obj.ema.items()}
+    state["elr_emas"] = elr_emas
+    return state
+
+
+def _restore_multico_state(
+    mct: Optional[MultiModelCoTrain], state: Optional[Dict[str, Any]], device: torch.device,
+) -> None:
+    if mct is None or state is None:
+        return
+    for k, v in state["loss_histories"].items():
+        mct.loss_histories[k] = v.to(device)
+    for key, ema_dict in state["elr_emas"].items():
+        if key in mct.elr_objs:
+            for k2, v2 in ema_dict.items():
+                mct.elr_objs[key].ema[k2] = v2.to(device)
+    mct._gmm_cache.clear()
+
+
+def _save_checkpoint(
+    epoch: int,
+    best_val_accuracy: float,
+    epochs_without_improvement: int,
+    gap_history: List[Dict[str, float]],
+    model: torch.nn.Module,
+    model2: Optional[torch.nn.Module],
+    optimizer: torch.optim.Optimizer,
+    optimizer2: Optional[torch.optim.Optimizer],
+    scheduler: Any,
+    divide_mix: Optional[DivideMix],
+    multi_model_cotrain: Optional[MultiModelCoTrain],
+    models_list: Optional[List[torch.nn.Module]],
+    optimizers_list: Optional[List[torch.optim.Optimizer]],
+    device: torch.device,
+    path: Path = RESUME_CKPT,
+) -> None:
+    ckpt: Dict[str, Any] = {
+        "epoch": epoch,
+        "best_val_accuracy": best_val_accuracy,
+        "epochs_without_improvement": epochs_without_improvement,
+        "gap_history": gap_history,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "divide_mix_state": _collect_divide_mix_state(divide_mix),
+        "multico_state": _collect_multico_state(multi_model_cotrain),
+    }
+    if scheduler is not None:
+        ckpt["scheduler_state_dict"] = scheduler.state_dict()
+    if model2 is not None:
+        ckpt["model2_state_dict"] = model2.state_dict()
+    if optimizer2 is not None:
+        ckpt["optimizer2_state_dict"] = optimizer2.state_dict()
+    if models_list is not None and len(models_list) > 2:
+        ckpt["models_list_state"] = [m.state_dict() for m in models_list[2:]]
+    if optimizers_list is not None and len(optimizers_list) > 2:
+        ckpt["optimizers_list_state"] = [opt.state_dict() for opt in optimizers_list[2:]]
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".pt.tmp")
+    torch.save(ckpt, tmp)
+    os.replace(str(tmp), str(path))
+    logger.info("Checkpoint saved to %s (epoch %d)", path, epoch + 1)
+
+
+def _load_checkpoint(
+    path: Path,
+    model: torch.nn.Module,
+    model2: Optional[torch.nn.Module],
+    optimizer: torch.optim.Optimizer,
+    optimizer2: Optional[torch.optim.Optimizer],
+    scheduler: Any,
+    divide_mix: Optional[DivideMix],
+    multi_model_cotrain: Optional[MultiModelCoTrain],
+    models_list: Optional[List[torch.nn.Module]],
+    optimizers_list: Optional[List[torch.optim.Optimizer]],
+    device: torch.device,
+) -> Tuple[int, float, int, List[Dict[str, float]]]:
+    logger.info("Loading checkpoint from %s", path)
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model_state_dict"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    if model2 is not None and "model2_state_dict" in ckpt:
+        model2.load_state_dict(ckpt["model2_state_dict"])
+    if optimizer2 is not None and "optimizer2_state_dict" in ckpt:
+        optimizer2.load_state_dict(ckpt["optimizer2_state_dict"])
+    if scheduler is not None and "scheduler_state_dict" in ckpt:
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+    if models_list is not None and "models_list_state" in ckpt:
+        for m, sd in zip(models_list[2:], ckpt["models_list_state"]):
+            m.load_state_dict(sd)
+    if optimizers_list is not None and "optimizers_list_state" in ckpt:
+        for opt, sd in zip(optimizers_list[2:], ckpt["optimizers_list_state"]):
+            opt.load_state_dict(sd)
+    _restore_divide_mix_state(divide_mix, ckpt.get("divide_mix_state"), device)
+    _restore_multico_state(multi_model_cotrain, ckpt.get("multico_state"), device)
+    epoch = ckpt.get("epoch", -1)
+    best_val = ckpt.get("best_val_accuracy", -1.0)
+    patience = ckpt.get("epochs_without_improvement", 0)
+    gap_hist = ckpt.get("gap_history", [])
+    logger.info("Resumed from epoch %d (best_val=%.4f)", epoch + 1, best_val)
+    return epoch, best_val, patience, gap_hist
+
+
 def main() -> None:
     """
     Wire the training use case and run training.
@@ -220,6 +367,18 @@ def main() -> None:
         type=str,
         default="local/logs",
         help="Directory to store training logs",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to a checkpoint .pt file to resume training from",
+    )
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=None,
+        help="Save a checkpoint every N epochs (default: 5)",
     )
     args = parser.parse_args()
 
@@ -402,6 +561,7 @@ def main() -> None:
     # in train_epoch/validate_epoch have the correct sequence length.
     text_max_length = config.get("text_max_length", 256)
     early_stopping_patience = args.early_stopping_patience or config.get("early_stopping_patience", 10)
+    checkpoint_interval = args.checkpoint_interval or config.get("checkpoint_interval", 5)
     epochs_without_improvement = 0
     best_val_accuracy = -1.0
 
@@ -411,7 +571,23 @@ def main() -> None:
     # Rolling history of per-attribute gaps (train - val), most recent first
     gap_history: List[Dict[str, float]] = []
 
-    for epoch in range(num_epochs):
+    # ── Resume from checkpoint ────────────────────────────────────────────
+    start_epoch = 0
+    resume_path = args.resume or (RESUME_CKPT if RESUME_CKPT.exists() else None)
+    if resume_path:
+        rp = Path(resume_path)
+        if rp.exists():
+            start_epoch, best_val_accuracy, epochs_without_improvement, gap_history = _load_checkpoint(
+                rp, model, model2, optimizer, optimizer2, scheduler,
+                divide_mix, multi_model_cotrain,
+                models_list if use_multico else None,
+                optimizers_list if use_multico else None,
+                device,
+            )
+            start_epoch += 1  # resume from next epoch
+            logger.info("Resuming training from epoch %d", start_epoch + 1)
+
+    for epoch in range(start_epoch, num_epochs):
         # ── Confidence Learning pre-epoch analysis ─────────────────────
         if confident_learning is not None and epoch >= 1:
             with torch.no_grad():
@@ -563,6 +739,27 @@ def main() -> None:
         else:
             epochs_without_improvement += 1
 
+        # ── Periodic checkpoint for resumability ──
+        if (epoch + 1) % checkpoint_interval == 0:
+            _save_checkpoint(
+                epoch, best_val_accuracy, epochs_without_improvement, gap_history,
+                model, model2, optimizer, optimizer2, scheduler,
+                divide_mix, multi_model_cotrain,
+                models_list if use_multico else None,
+                optimizers_list if use_multico else None,
+                device,
+            )
+        # Also save a lightweight resume checkpoint every epoch for crash recovery
+        _save_checkpoint(
+            epoch, best_val_accuracy, epochs_without_improvement, gap_history,
+            model, model2, optimizer, optimizer2, scheduler,
+            divide_mix, multi_model_cotrain,
+            models_list if use_multico else None,
+            optimizers_list if use_multico else None,
+            device,
+            path=SAVE_DIR / "resume_latest.pt",
+        )
+
         if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
             print(
                 f"Early stopping triggered after {epochs_without_improvement} epochs "
@@ -576,6 +773,16 @@ def main() -> None:
     torch.save(model.state_dict(), last_tmp)
     os.replace(last_tmp, last_path)
     print(f"  -> Saved last model to {last_path}")
+    # Final full checkpoint
+    _save_checkpoint(
+        epoch, best_val_accuracy, epochs_without_improvement, gap_history,
+        model, model2, optimizer, optimizer2, scheduler,
+        divide_mix, multi_model_cotrain,
+        models_list if use_multico else None,
+        optimizers_list if use_multico else None,
+        device,
+        path=SAVE_DIR / "final_resume.pt",
+    )
 
     training_logger.close()
     print(f"Training complete. Best validation accuracy: {best_val_accuracy:.4f}")
