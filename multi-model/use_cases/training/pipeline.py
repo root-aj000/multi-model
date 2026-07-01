@@ -26,11 +26,13 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, LinearLR, SequentialLR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from lib.models.factory import create_model
 from lib.models.fg_mfn import ATTRIBUTE_NAMES
-from lib.preprocessing.dataset import CustomDataset, load_dataset
+from lib.preprocessing.dataset import (
+    AUX_FEATURE_COLUMNS, AUX_FEATURE_DIM, CustomDataset, load_dataset,
+)
 from lib.preprocessing.image.transforms import DEFAULT_IMAGE_SIZE, build_image_transform
 from lib.preprocessing.text.cleaner import clean_text, clean_adcopy
 from lib.preprocessing.text.pipeline import build_text_pipeline
@@ -41,6 +43,7 @@ from lib.utils.class_weights import (
     log_class_distribution,
 )
 from lib.utils.config import get_dataset_paths, get_label_maps, load_config
+from lib.utils.losses import FocalLoss, GCELoss
 
 logger = logging.getLogger(__name__)
 
@@ -120,12 +123,17 @@ def _build_text_pipeline(config: Dict[str, Any]) -> Optional[Any]:
     return build_text_pipeline(cleaner, tokenizer_fn)
 
 
-def load_datasets(config: Dict[str, Any]) -> Tuple[CustomDataset, CustomDataset]:
+def load_datasets(
+    config: Dict[str, Any],
+    aux_feature_columns: Optional[List[str]] = None,
+) -> Tuple[CustomDataset, CustomDataset]:
     """
     Load and return the train and validation datasets.
 
     Args:
         config: Configuration dictionary with dataset paths and ATTRIBUTES.
+        aux_feature_columns: Optional list of CSV column names for handcrafted
+            auxiliary feature extraction.
 
     Returns:
         (train_dataset, val_dataset)
@@ -150,6 +158,7 @@ def load_datasets(config: Dict[str, Any]) -> Tuple[CustomDataset, CustomDataset]
         image_pipeline=train_image_pipeline,
         text_pipeline=text_pipeline,
         dataset_root=dataset_root,
+        aux_feature_columns=aux_feature_columns,
     )
     val_dataset = load_dataset(
         "val",
@@ -157,6 +166,7 @@ def load_datasets(config: Dict[str, Any]) -> Tuple[CustomDataset, CustomDataset]
         image_pipeline=val_image_pipeline,
         text_pipeline=text_pipeline,
         dataset_root=dataset_root,
+        aux_feature_columns=aux_feature_columns,
     )
     logger.info(
         "Datasets loaded: train=%d, val=%d (image_size=%s)",
@@ -170,6 +180,7 @@ def create_data_loaders(
     val_dataset: Any,
     batch_size: int = _FALLBACK_BATCH_SIZE,
     num_workers: int = _FALLBACK_NUM_WORKERS,
+    sampler: Optional[WeightedRandomSampler] = None,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create DataLoaders for training and validation datasets.
@@ -183,6 +194,7 @@ def create_data_loaders(
         val_dataset:   Validation dataset.
         batch_size:    Samples per batch.
         num_workers:   DataLoader worker processes.
+        sampler:       Optional WeightedRandomSampler for class rebalancing.
 
     Returns:
         (train_loader, val_loader)
@@ -192,7 +204,8 @@ def create_data_loaders(
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=sampler is None,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=use_pin_memory,
         drop_last=True,   # BUG-07 FIX: prevents batch-size-1 BatchNorm crash
@@ -462,22 +475,47 @@ def setup_training_components(
     else:
         scheduler = base_scheduler
 
-    # Build criterion — supports per-attribute class weights and label smoothing from config.
+    # Build criterion — supports per-attribute class weights, focal loss,
+    # and per-attribute label smoothing.
     # CLASS_WEIGHTS must be at the top level of config (not under "model").
     class_weights = cfg.get("CLASS_WEIGHTS", {})
-    label_smoothing = cfg.get("label_smoothing", 0.0)
+    label_smoothing_raw = cfg.get("label_smoothing", 0.0)
+    # Allow label_smoothing to be a float (global) or a dict (per-attribute)
+    global_label_smoothing = label_smoothing_raw if isinstance(label_smoothing_raw, (int, float)) else 0.0
+    per_attr_label_smoothing = label_smoothing_raw if isinstance(label_smoothing_raw, dict) else {}
+    focal_gamma = cfg.get("FOCAL_LOSS_GAMMA", {})
+    if isinstance(focal_gamma, (int, float)):
+        focal_gamma = {name: focal_gamma for name in class_weights}
+    gce_q = cfg.get("GCE_Q", {})
+    if isinstance(gce_q, (int, float)):
+        gce_q = {name: gce_q for name in class_weights}
+    # Loss selection priority per attribute: FocalLoss > GCELoss > CrossEntropyLoss
+
     if isinstance(class_weights, dict) and class_weights:
         criterion: Any = {}
         for attr_name, weights in class_weights.items():
-            if isinstance(weights, list):
+            if not isinstance(weights, list):
+                continue
+            weight_t = torch.tensor(weights, dtype=torch.float32, device=device)
+            smoothing = per_attr_label_smoothing.get(attr_name, global_label_smoothing)
+            gamma = focal_gamma.get(attr_name, 0.0)
+            q = gce_q.get(attr_name, 0.0)
+            if gamma > 0:
+                criterion[attr_name] = FocalLoss(
+                    gamma=gamma, weight=weight_t, label_smoothing=smoothing,
+                )
+            elif q > 0:
+                criterion[attr_name] = GCELoss(
+                    q=q, weight=weight_t, label_smoothing=smoothing,
+                )
+            else:
                 criterion[attr_name] = torch.nn.CrossEntropyLoss(
-                    weight=torch.tensor(weights, dtype=torch.float32, device=device),
-                    label_smoothing=label_smoothing,
+                    weight=weight_t, label_smoothing=smoothing,
                 )
         if not criterion:
-            criterion = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+            criterion = torch.nn.CrossEntropyLoss(label_smoothing=global_label_smoothing)
     else:
-        criterion = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        criterion = torch.nn.CrossEntropyLoss(label_smoothing=global_label_smoothing)
 
     mixup_alpha = cfg.get("mixup_alpha", 0.0)
 
@@ -552,17 +590,66 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
             "Co-occurrence prior computed for %d attributes (shape: %s)",
             len(attr_names_cooc), list(cooc_prior.shape),
         )
+        # Log NMI values for each pair so we can see which attributes share signal
+        for i, ai in enumerate(attr_names_cooc):
+            for j, aj in enumerate(attr_names_cooc):
+                if i < j:
+                    nmi_val = cooc_prior[i, j].item()
+                    if nmi_val > 0.05:
+                        logger.info("  NMI %s ↔ %s: %.3f", ai, aj, nmi_val)
 
-    train_dataset, val_dataset = load_datasets(config)
+    # Enable handcrafted auxiliary features from CSV metadata columns
+    use_aux_features = config.get("USE_AUX_FEATURES", False)
+    aux_feature_columns = AUX_FEATURE_COLUMNS if use_aux_features else None
+    if use_aux_features:
+        model_cfg = {**model_cfg, "AUX_FEATURE_DIM": AUX_FEATURE_DIM}
+        logger.info(
+            "Handcrafted aux features enabled: %s (dim=%d)",
+            AUX_FEATURE_COLUMNS, AUX_FEATURE_DIM,
+        )
+
+    train_dataset, val_dataset = load_datasets(config, aux_feature_columns)
     batch_size = config.get("batch_size", _FALLBACK_BATCH_SIZE)
     num_workers = min(
         config.get("num_workers", _FALLBACK_NUM_WORKERS),
         os.cpu_count() or 1,
     )
+
+    # WeightedRandomSampler — oversamples minority classes for noisy attributes
+    noisy_attrs = set(config.get("NOISY_ATTRIBUTES", []))
+    sampler = None
+    if noisy_attrs and "CLASS_WEIGHTS" in config:
+        cw = config["CLASS_WEIGHTS"]
+        if isinstance(cw, dict) and cw:
+            # Per-sample weight = max inverse-frequency weight across noisy attrs
+            sample_weights = []
+            train_df = train_dataset.data
+            for _, row in train_df.iterrows():
+                max_w = 0.0
+                for attr in noisy_attrs:
+                    if attr in cw and isinstance(cw[attr], list):
+                        label_val = row.get(attr)
+                        if attr in train_dataset._label_indices and label_val in train_dataset._label_indices[attr]:
+                            cls_idx = train_dataset._label_indices[attr][label_val]
+                            if cls_idx < len(cw[attr]):
+                                max_w = max(max_w, cw[attr][cls_idx])
+                sample_weights.append(max(max_w, 1.0))
+            sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(sample_weights),
+                replacement=True,
+            )
+            logger.info(
+                "WeightedRandomSampler: %d samples, %.2f avg weight (noisy=%s)",
+                len(sample_weights), sum(sample_weights) / len(sample_weights),
+                sorted(noisy_attrs),
+            )
+
     train_loader, val_loader = create_data_loaders(
         train_dataset, val_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
+        sampler=sampler,
     )
 
     # BUG-25 FIX: auto-compute class weights from the training CSV when
@@ -606,12 +693,108 @@ def build_training_pipeline(config_source: Union[str, Dict[str, Any]]) -> Dict[s
     if accuracy_attributes:
         logger.info("Accuracy attributes: %s", sorted(accuracy_attributes))
 
+    use_tta = config.get("USE_TTA", False)
+    logger.info("TTA: %s", "enabled (horizontal flip)" if use_tta else "disabled")
+
+    # ── ELR setup ──
+    elr_beta = config.get("ELR_BETA", 0.7)
+    use_elr = elr_beta > 0 and not config.get("USE_DIVIDEMIX", False)
+    elr = None
+    if use_elr and elr_beta > 0:
+        from use_cases.training.train_model import ELRRegularizer
+        num_classes_dict = {
+            name: attr_cfg["num_classes"]
+            for name, attr_cfg in config.get("ATTRIBUTES", {}).items()
+        }
+        elr = ELRRegularizer(
+            n_samples=len(train_dataset),
+            num_classes_dict=num_classes_dict,
+            beta=elr_beta,
+            device=device,
+        )
+        logger.info("ELR regularizer created: beta=%.2f, %d samples", elr_beta, len(train_dataset))
+
+    # ── Co-teaching / DivideMix dual-model setup ──
+    use_coteaching = config.get("USE_COTEACHING", False)
+    use_dividemix = config.get("USE_DIVIDEMIX", False)
+    model2 = None
+    optimizer2 = None
+    divide_mix = None
+
+    if use_dividemix:
+        from use_cases.training.train_model import DivideMix
+        model2 = create_model(model_cfg, device)
+        num_classes_dict = {
+            name: attr_cfg["num_classes"]
+            for name, attr_cfg in config.get("ATTRIBUTES", {}).items()
+        }
+        divide_mix = DivideMix(
+            n_samples=len(train_dataset),
+            num_classes_dict=num_classes_dict,
+            device=device,
+            warmup_epochs=config.get("DIVIDEMIX_WARMUP_EPOCHS", 10),
+            clean_threshold=config.get("DIVIDEMIX_CLEAN_THRESHOLD", 0.5),
+            lambda_u=config.get("DIVIDEMIX_LAMBDA_U", 25.0),
+            noise_rate=config.get("COTEACHING_NOISE_RATE", 0.2),
+            beta_elr=elr_beta,
+            elr_T=config.get("epochs", 100),
+        )
+        # Reload train dataset with return_index=True for DivideMix
+        train_dataset_idx, _ = load_datasets(config, aux_feature_columns)
+        train_dataset_idx.return_index = True
+        train_loader_idx, _ = create_data_loaders(
+            train_dataset_idx, val_dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            sampler=sampler,
+        )
+        train_loader = train_loader_idx
+        model2_components = setup_training_components(model2, config, device)
+        optimizer2 = model2_components["optimizer"]
+        logger.info("DivideMix enabled: warmup=%d, lambda_u=%.1f, clean_thresh=%.2f",
+                    divide_mix.warmup_epochs, divide_mix.lambda_u, divide_mix.clean_threshold)
+
+    elif use_coteaching:
+        model2 = create_model(model_cfg, device)
+        # Reload train dataset with return_index=True for sample selection
+        train_dataset_idx, _ = load_datasets(config, aux_feature_columns)
+        train_dataset_idx.return_index = True
+        train_loader_idx, _ = create_data_loaders(
+            train_dataset_idx, val_dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            sampler=sampler,
+        )
+        train_loader = train_loader_idx
+        model2_components = setup_training_components(model2, config, device)
+        optimizer2 = model2_components["optimizer"]
+        logger.info("Co-teaching enabled: noise_rate=%.2f",
+                    config.get("COTEACHING_NOISE_RATE", 0.2))
+
+    else:
+        # Standard mode — enable return_index only when ELR needs it
+        if use_elr and elr_beta > 0:
+            train_dataset_idx, _ = load_datasets(config, aux_feature_columns)
+            train_dataset_idx.return_index = True
+            train_loader_idx, _ = create_data_loaders(
+                train_dataset_idx, val_dataset,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                sampler=sampler,
+            )
+            train_loader = train_loader_idx
+
     return {
         "model": model,
+        "model2": model2,
         "train_loader": train_loader,
         "val_loader": val_loader,
         **components,
         "attribute_loss_weights": config.get("ATTRIBUTE_LOSS_WEIGHTS", {}),
         "stop_gradient_heads": set(config.get("STOP_GRADIENT_HEADS", [])),
         "accuracy_attributes": accuracy_attributes,
+        "use_tta": use_tta,
+        "elr": elr,
+        "optimizer2": optimizer2,
+        "divide_mix": divide_mix,
     }

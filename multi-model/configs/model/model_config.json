@@ -91,6 +91,14 @@
     "Typical values: 4, 8 (default), 16."
   ],
 
+  "USE_AUX_FEATURES": true,
+
+  "NOISY_ATTRIBUTES": ["attention_score", "predicted_ctr", "likelihood_shares"],
+  "_comment_NOISY_ATTRIBUTES": "These attributes use a separate low-capacity MLP branch (noisy_branch) that is detached from the main shared representation. This prevents their noisy gradients from corrupting the features used by semantic heads.",
+
+  "NOISY_BRANCH_HIDDEN": 64,
+  "_comment_NOISY_BRANCH_HIDDEN": "Hidden dimension of the noisy attribute MLP branch. Smaller than HIDDEN_DIM (512) to limit capacity and prevent overfitting to noise.",
+
   "USE_GRAPH_HEADS": true,
   "_comment_USE_GRAPH_HEADS": [
     "If true, replaces independent per-attribute heads with an",
@@ -104,18 +112,18 @@
   ],
 
   "GRAPH_HEADS": {
-    "D_NODE": 128,
+    "D_NODE": 256,
     "_comment_D_NODE": "Dimension of each attribute node's embedding.",
-    "N_LAYERS": 2,
+    "N_LAYERS": 4,
     "_comment_N_LAYERS": "Number of graph attention (TransformerEncoder) layers.",
-    "N_HEADS": 4,
+    "N_HEADS": 8,
     "_comment_N_HEADS": "Number of attention heads per layer. Must divide D_NODE."
   },
 
   "DROPOUT": 0.3,
   "_comment_DROPOUT": "Reduced from 0.5 → 0.3. SAM provides complementary flat-minima regularisation, so explicit dropout can be loosened to let more signal flow through the GNN heads.",
 
-  "FREEZE_BACKBONE": true,
+  "FREEZE_BACKBONE": false,
   "_comment_FREEZE_BACKBONE": [
     "Freeze the pretrained visual backbone convolutional weights.",
     "With 4860 training samples and ResNet-18 (11M params),",
@@ -138,11 +146,11 @@
     "sentiment": 1.5,
     "emotion": 1.5,
     "dominant_colour": 1.0,
-    "attention_score": 0.05,
+    "attention_score": 1.0,
     "trust_safety": 1.5,
-    "predicted_ctr": 0.05,
-    "likelihood_shares": 0.05,
-    "target_audience": 0.8
+    "predicted_ctr": 1.0,
+    "likelihood_shares": 1.0,
+    "target_audience": 1.5
   },
   "_comment_ATTRIBUTE_LOSS_WEIGHTS": [
     "Per-attribute multiplier applied to each head's CrossEntropyLoss before summing.",
@@ -288,13 +296,60 @@
     "Standard image augmentation (already configured) is sufficient."
   ],
 
-  "label_smoothing": 0.1,
-  "_comment_label_smoothing": [
-    "Reduced from 0.25 → 0.1: SAM provides the regularisation that label smoothing",
-    "previously handled. Lower smoothing means the model can assign more probability",
-    "mass to the correct class, improving gradient signal for the semantic heads.",
-    "Typical values: 0.05–0.25. 0.1 is a balanced middle ground with SAM active."
+  "FOCAL_LOSS_GAMMA": {
+    "attention_score": 2.0,
+    "predicted_ctr": 2.0,
+    "likelihood_shares": 2.0,
+    "target_audience": 1.5
+  },
+  "_comment_FOCAL_LOSS_GAMMA": [
+    "Per-attribute gamma for Focal Loss. gamma=0 disables focal loss (uses standard CE).",
+    "gamma=2.0 down-weights easy examples — helps with imbalanced/noisy attributes.",
+    "Set to a float to apply the same gamma to all attributes, or a dict for per-attr control."
   ],
+
+  "label_smoothing": {
+    "theme": 0.05,
+    "sentiment": 0.1,
+    "emotion": 0.1,
+    "dominant_colour": 0.05,
+    "attention_score": 0.3,
+    "trust_safety": 0.1,
+    "predicted_ctr": 0.3,
+    "likelihood_shares": 0.3,
+    "target_audience": 0.2
+  },
+  "_comment_label_smoothing": [
+    "Per-attribute label smoothing. Can be a float (uniform) or a dict (per-attribute).",
+    "Higher smoothing (0.2-0.3) for noisy/imbalanced attributes prevents overfitting to noise.",
+    "Lower smoothing (0.05) for well-learned attributes lets them assign more probability mass",
+    "to the correct class.",
+    "Global default was 0.1 before per-attribute support."
+  ],
+
+  "USE_TTA": true,
+  "_comment_USE_TTA": "If true, applies test-time augmentation (horizontal flip averaging) during validation for ~1-3% accuracy improvement at no training cost.",
+
+  "ELR_BETA": 0.7,
+  "_comment_ELR_BETA": "Beta coefficient for Early Learning Regularization. Controls EMA momentum for per-target tracking. Typical range: 0.3–0.9.",
+
+  "USE_COTEACHING": false,
+  "_comment_USE_COTEACHING": "If true, use Co-teaching (two models, small-loss sample exchange). Requires USE_COTEACHING=true and two optimizer configs.",
+
+  "COTEACHING_NOISE_RATE": 0.2,
+  "_comment_COTEACHING_NOISE_RATE": "Estimated label noise rate for Co-teaching. Determines what fraction of samples with the largest losses are discarded each batch.",
+
+  "USE_DIVIDEMIX": false,
+  "_comment_USE_DIVIDEMIX": "If true, use DivideMix (GMM-based clean/noisy split + co-training). Overrides USE_COTEACHING if both are true.",
+
+  "DIVIDEMIX_WARMUP_EPOCHS": 10,
+  "_comment_DIVIDEMIX_WARMUP_EPOCHS": "Number of warmup epochs where DivideMix trains on the full dataset before applying GMM splitting.",
+
+  "DIVIDEMIX_CLEAN_THRESHOLD": 0.5,
+  "_comment_DIVIDEMIX_CLEAN_THRESHOLD": "GMM probability threshold for clean/noisy split in DivideMix.",
+
+  "DIVIDEMIX_LAMBDA_U": 25.0,
+  "_comment_DIVIDEMIX_LAMBDA_U": "Weight for unsupervised (noisy sample) loss in DivideMix.",
 
   "early_stopping_patience": 10,
   "_comment_early_stopping_patience": [
@@ -431,7 +486,7 @@
 
   "_comment_accuracy": "=== ACCURACY METRIC ===",
 
-  "ACCURACY_ATTRIBUTES": ["theme", "sentiment", "emotion", "dominant_colour", "trust_safety"],
+  "ACCURACY_ATTRIBUTES": ["theme", "sentiment", "emotion", "dominant_colour", "attention_score", "trust_safety", "predicted_ctr", "likelihood_shares", "target_audience"],
   "_comment_ACCURACY_ATTRIBUTES": [
     "List of attribute names to include in the primary accuracy metric.",
     "Only these attributes contribute to the overall 'accuracy' reported",

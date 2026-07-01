@@ -440,35 +440,77 @@ class FG_MFN(nn.Module):
             fusion_out_dim = hidden_dim
             logger.info("Add fusion: %d → %d", visual_dim, hidden_dim)
 
+        # ── Handcrafted auxiliary feature injection ────────────────────────
+        aux_feature_dim = cfg.get("AUX_FEATURE_DIM", 0)
+        if aux_feature_dim > 0:
+            self.aux_mlp = nn.Sequential(
+                nn.Linear(aux_feature_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+            )
+            logger.info(
+                "Handcrafted aux features: %d dim → %d (residual injection after fusion)",
+                aux_feature_dim, hidden_dim,
+            )
+
         # ── Shared FC after fusion ──────────────────────────────────────────
         self.shared_fc = self._build_shared_layer(
             fusion_out_dim, hidden_dim, dropout,
             cfg.get("DEEP_SHARED_LAYER", False),
         )
 
+        # ── Noisy attributes get a separate low-capacity branch ────────────
+        self.noisy_attrs: set = set(cfg.get("NOISY_ATTRIBUTES", []))
+        if self.noisy_attrs:
+            noisy_hidden = cfg.get("NOISY_BRANCH_HIDDEN", 64)
+            self.noisy_branch = nn.Sequential(
+                nn.Linear(hidden_dim, noisy_hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+            )
+            logger.info(
+                "Noisy branch: %d → %d → independent heads for %s",
+                hidden_dim, noisy_hidden, sorted(self.noisy_attrs),
+            )
+
         # ── Per-attribute classification heads ──────────────────────────────
         self.use_graph_heads = cfg.get("USE_GRAPH_HEADS", False)
         self.attribute_heads = nn.ModuleDict()
 
         if self.use_graph_heads:
-            attr_names = [
+            all_attr_names = [
                 n for n in ATTRIBUTE_NAMES
                 if "ATTRIBUTES" in cfg and n in cfg["ATTRIBUTES"]
             ]
+            # Exclude noisy attributes from the graph
+            graph_attr_names = [n for n in all_attr_names if n not in self.noisy_attrs]
+            if not graph_attr_names:
+                raise ValueError(
+                    "All attributes are marked as noisy; no attributes left for the graph. "
+                    "Either disable USE_GRAPH_HEADS or reduce NOISY_ATTRIBUTES."
+                )
             attr_num_classes = {
                 n: cfg["ATTRIBUTES"][n]["num_classes"]
-                for n in attr_names
+                for n in graph_attr_names
             }
             gh_cfg = cfg.get("GRAPH_HEADS", {})
             cooc_raw = cfg.get("COOCCURRENCE_PRIOR")
             if cooc_raw is not None:
-                cooc_tensor = torch.tensor(cooc_raw, dtype=torch.float32)
+                # Filter co-occurrence matrix to only graph attributes
+                all_idx = {n: i for i, n in enumerate(all_attr_names)}
+                graph_idx = [all_idx[n] for n in graph_attr_names]
+                if isinstance(cooc_raw, list):
+                    cooc_tensor_list = cooc_raw
+                    cooc_full = torch.tensor(cooc_tensor_list, dtype=torch.float32)
+                else:
+                    cooc_full = cooc_raw
+                cooc_tensor = cooc_full[graph_idx][:, graph_idx]
             else:
                 cooc_tensor = None
 
             self.graph_heads = AttributeCooccurrenceGraph(
                 hidden_dim=hidden_dim,
-                attr_names=attr_names,
+                attr_names=graph_attr_names,
                 attr_num_classes=attr_num_classes,
                 dropout=dropout,
                 d_node=gh_cfg.get("D_NODE", 128),
@@ -476,7 +518,15 @@ class FG_MFN(nn.Module):
                 n_heads=gh_cfg.get("N_HEADS", 4),
                 cooc_prior=cooc_tensor,
             )
-            logger.info("Using AttributeCooccurrenceGraph for %d attributes", len(attr_names))
+            # Add independent heads for noisy attributes on top of the noisy branch
+            if self.noisy_attrs:
+                self._create_multi_attribute_heads(
+                    cfg, noisy_hidden, attr_filter=self.noisy_attrs,
+                )
+            logger.info(
+                "Using AttributeCooccurrenceGraph for %d attributes (noisy=%d excluded)",
+                len(graph_attr_names), len(self.noisy_attrs),
+            )
         elif "ATTRIBUTES" in cfg:
             self._create_multi_attribute_heads(cfg, hidden_dim)
         else:
@@ -528,21 +578,24 @@ class FG_MFN(nn.Module):
             logger.info("Shared FC: %d → %d", in_dim, hidden_dim)
         return layer
 
-    def _create_multi_attribute_heads(self, cfg: Dict[str, Any], hidden_dim: int) -> None:
+    def _create_multi_attribute_heads(
+        self,
+        cfg: Dict[str, Any],
+        hidden_dim: int,
+        attr_filter: Optional[set] = None,
+    ) -> None:
         created = 0
         dropout = cfg["DROPOUT"]
         for attr_name in ATTRIBUTE_NAMES:
             if attr_name not in cfg["ATTRIBUTES"]:
+                continue
+            if attr_filter is not None and attr_name not in attr_filter:
                 continue
             attr_cfg = cfg["ATTRIBUTES"][attr_name]
             num_classes = attr_cfg.get("num_classes")
             if not isinstance(num_classes, int) or num_classes <= 0:
                 logger.warning("Skipping '%s': invalid num_classes=%s", attr_name, num_classes)
                 continue
-            # Task-specific two-layer head: each attribute gets its own private
-            # MLP so gradient conflicts between heads are minimised.
-            # Dropout uses the global DROPOUT config value (not hardcoded 0.15)
-            # so increasing DROPOUT in config automatically regularises all heads.
             head_hidden = max(hidden_dim // 2, num_classes * 4)
             self.attribute_heads[attr_name] = nn.Sequential(
                 nn.Linear(hidden_dim, head_hidden),
@@ -552,7 +605,7 @@ class FG_MFN(nn.Module):
             )
             created += 1
             logger.info("Head '%s': %d → %d → %d classes (dropout=%.2f)", attr_name, hidden_dim, head_hidden, num_classes, dropout)
-        if created == 0:
+        if created == 0 and attr_filter is None:
             raise ValueError("No attribute heads created. Check ATTRIBUTES in config.")
 
     def _create_legacy_head(self, cfg: Dict[str, Any], hidden_dim: int) -> None:
@@ -567,6 +620,7 @@ class FG_MFN(nn.Module):
         images: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        aux_features: Optional[torch.Tensor] = None,
         stop_gradient_heads: Optional[set] = None,
     ) -> Dict[str, torch.Tensor]:
         """
@@ -574,6 +628,7 @@ class FG_MFN(nn.Module):
             images:         (B, C, H, W)
             input_ids:      (B, seq_len)
             attention_mask: (B, seq_len)
+            aux_features:   Optional (B, aux_feature_dim) handcrafted features.
             stop_gradient_heads: Optional set of attribute names whose gradients
                 should NOT flow back into shared features. The heads still compute
                 forward pass and their own weights receive gradients, but the
@@ -591,19 +646,32 @@ class FG_MFN(nn.Module):
         # Fuse
         fused = self._fuse(visual_features, text_features)  # (B, hidden_dim)
 
+        # Inject handcrafted auxiliary features as residual bias
+        if aux_features is not None and hasattr(self, 'aux_mlp'):
+            aux_h = self.aux_mlp(aux_features)  # (B, hidden_dim)
+            fused = fused + aux_h
+
         # Shared FC
         shared = self.shared_fc(fused)  # (B, hidden_dim)
 
         # Per-attribute classification (graph or independent heads)
         if self.use_graph_heads:
-            return self.graph_heads(shared)
+            results = self.graph_heads(shared)
+        else:
+            results = {}
+            for name, head in self.attribute_heads.items():
+                if stop_gradient_heads and name in stop_gradient_heads:
+                    results[name] = head(shared.detach())
+                else:
+                    results[name] = head(shared)
 
-        results = {}
-        for name, head in self.attribute_heads.items():
-            if stop_gradient_heads and name in stop_gradient_heads:
-                results[name] = head(shared.detach())
-            else:
-                results[name] = head(shared)
+        # Noisy attributes use a separate low-capacity branch
+        if self.noisy_attrs:
+            noisy_h = self.noisy_branch(shared.detach())
+            for name in self.noisy_attrs:
+                if name in self.attribute_heads:
+                    results[name] = self.attribute_heads[name](noisy_h)
+
         return results
 
     def _fuse(self, visual: torch.Tensor, text: torch.Tensor) -> torch.Tensor:
