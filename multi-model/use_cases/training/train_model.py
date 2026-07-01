@@ -983,21 +983,40 @@ class DivideMix:
 
             # ── Warmup: standard supervised training ──
             if is_warmup:
+                use_sam1 = hasattr(optimizer1, 'first_step')
+                use_sam2 = hasattr(optimizer2, 'first_step')
+
+                # Model1 — forward + backward + step
+                optimizer1.zero_grad()
                 out1 = model1(inputs, input_ids, attention_mask, aux_features=aux_features,
                               stop_gradient_heads=stop_gradient_heads)
+                loss1 = _compute_loss(out1, labels, labels, 1.0, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+                loss1.backward()
+                if use_sam1:
+                    optimizer1.first_step(zero_grad=True)
+                    out1 = model1(inputs, input_ids, attention_mask, aux_features=aux_features,
+                                  stop_gradient_heads=stop_gradient_heads)
+                    loss1 = _compute_loss(out1, labels, labels, 1.0, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+                    loss1.backward()
+                    optimizer1.second_step(zero_grad=True)
+                else:
+                    optimizer1.step()
+
+                # Model2 — forward + backward + step
+                optimizer2.zero_grad()
                 out2 = model2(inputs, input_ids, attention_mask, aux_features=aux_features,
                               stop_gradient_heads=stop_gradient_heads)
-
-                loss1 = _compute_loss(out1, labels, labels, 1.0, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
                 loss2 = _compute_loss(out2, labels, labels, 1.0, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
-
-                optimizer1.zero_grad()
-                loss1.backward()
-                optimizer1.step()
-
-                optimizer2.zero_grad()
                 loss2.backward()
-                optimizer2.step()
+                if use_sam2:
+                    optimizer2.first_step(zero_grad=True)
+                    out2 = model2(inputs, input_ids, attention_mask, aux_features=aux_features,
+                                  stop_gradient_heads=stop_gradient_heads)
+                    loss2 = _compute_loss(out2, labels, labels, 1.0, criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+                    loss2.backward()
+                    optimizer2.second_step(zero_grad=True)
+                else:
+                    optimizer2.step()
 
                 # Update loss history
                 loss1_per = _compute_per_sample_loss(out1, labels, criterion, attribute_loss_weights)
@@ -1058,74 +1077,64 @@ class DivideMix:
             clean_mask2 = in_split(clean2, indices)
             noisy_mask2 = ~clean_mask2
 
-            # ── Supervised loss on clean samples ──
-            loss_sup1 = torch.tensor(0.0, device=device)
-            loss_sup2 = torch.tensor(0.0, device=device)
-            if clean_mask1.any():
-                out1_clean = {k: v[clean_mask1] for k, v in out1.items()}
-                labels_clean = {k: v[clean_mask1] for k, v in labels.items()}
-                loss_sup1 = _compute_loss(out1_clean, labels_clean, labels_clean, 1.0,
-                                          criterion, attribute_loss_weights, loss_truncation=loss_truncation)
-            if clean_mask2.any():
-                out2_clean = {k: v[clean_mask2] for k, v in out2.items()}
-                labels_clean2 = {k: v[clean_mask2] for k, v in labels.items()}
-                loss_sup2 = _compute_loss(out2_clean, labels_clean2, labels_clean2, 1.0,
-                                          criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+            def _divide_loss_fn(out_a, out_b, clean_mask, noisy_mask, elr_obj, labels_in):
+                """Compute supervised + consistency + ELR loss for one model."""
+                sup = torch.tensor(0.0, device=device)
+                if clean_mask.any():
+                    out_clean = {k: v[clean_mask] for k, v in out_a.items()}
+                    labels_clean = {k: v[clean_mask] for k, v in labels_in.items()}
+                    sup = _compute_loss(out_clean, labels_clean, labels_clean, 1.0,
+                                        criterion, attribute_loss_weights, loss_truncation=loss_truncation)
+                unsup = torch.tensor(0.0, device=device)
+                if noisy_mask.any():
+                    out_noisy = {k: v[noisy_mask] for k, v in out_a.items()}
+                    out_b_for = {k: v[noisy_mask] for k, v in out_b.detach().items()}
+                    for attr in out_noisy:
+                        if attr not in out_b_for:
+                            continue
+                        p = torch.softmax(out_b_for[attr], dim=-1)
+                        w = (attribute_loss_weights or {}).get(attr, 1.0)
+                        unsup = unsup + w * torch.mean(
+                            torch.sum(-p * torch.log_softmax(out_noisy[attr], dim=-1), dim=-1)
+                        )
+                elr_val = torch.tensor(0.0, device=device)
+                if noisy_mask.any():
+                    out_noisy = {k: v[noisy_mask] for k, v in out_a.items()}
+                    elr_val = elr_obj(out_noisy, indices[noisy_mask], epoch)
+                return sup + self.lambda_u * unsup + elr_val
 
-            # ── Consistency loss on noisy samples ──
-            # Model1: minimise cross-entropy against Model2's prediction (soft pseudo-label)
-            # Model2: minimise cross-entropy against Model1's prediction
-            loss_unsup1 = torch.tensor(0.0, device=device)
-            loss_unsup2 = torch.tensor(0.0, device=device)
-            if noisy_mask1.any():
-                out1_noisy = {k: v[noisy_mask1] for k, v in out1.items()}
-                out2_for1 = {k: v[noisy_mask1] for k, v in out2.detach().items()}
-                for attr in out1_noisy:
-                    if attr not in out2_for1:
-                        continue
-                    p = torch.softmax(out2_for1[attr], dim=-1)
-                    w = (attribute_loss_weights or {}).get(attr, 1.0)
-                    loss_unsup1 = loss_unsup1 + w * torch.mean(
-                        torch.sum(-p * torch.log_softmax(out1_noisy[attr], dim=-1), dim=-1)
-                    )
-            if noisy_mask2.any():
-                out2_noisy = {k: v[noisy_mask2] for k, v in out2.items()}
-                out1_for2 = {k: v[noisy_mask2] for k, v in out1.detach().items()}
-                for attr in out2_noisy:
-                    if attr not in out1_for2:
-                        continue
-                    p = torch.softmax(out1_for2[attr], dim=-1)
-                    w = (attribute_loss_weights or {}).get(attr, 1.0)
-                    loss_unsup2 = loss_unsup2 + w * torch.mean(
-                        torch.sum(-p * torch.log_softmax(out2_noisy[attr], dim=-1), dim=-1)
-                    )
+            use_sam1 = hasattr(optimizer1, 'first_step')
+            use_sam2 = hasattr(optimizer2, 'first_step')
 
-            # ── ELR regularisation on noisy samples ──
-            if noisy_mask1.any():
-                out1_noisy = {k: v[noisy_mask1] for k, v in out1.items()}
-                loss_elr1 = self.elr1(out1_noisy, indices[noisy_mask1], epoch)
-            else:
-                loss_elr1 = torch.tensor(0.0, device=device)
-            if noisy_mask2.any():
-                out2_noisy = {k: v[noisy_mask2] for k, v in out2.items()}
-                loss_elr2 = self.elr2(out2_noisy, indices[noisy_mask2], epoch)
-            else:
-                loss_elr2 = torch.tensor(0.0, device=device)
-
-            # ── Combined loss ──
-            total_loss1 = loss_sup1 + self.lambda_u * loss_unsup1 + loss_elr1
-            total_loss2 = loss_sup2 + self.lambda_u * loss_unsup2 + loss_elr2
-
-            # ── Backward ──
+            # ── Model1 backward + step ──
+            total_loss1 = _divide_loss_fn(out1, out2, clean_mask1, noisy_mask1, self.elr1, labels)
             optimizer1.zero_grad()
             total_loss1.backward()
             torch.nn.utils.clip_grad_norm_(model1.parameters(), max_norm=1.0)
-            optimizer1.step()
+            if use_sam1:
+                optimizer1.first_step(zero_grad=True)
+                out1_sam = model1(inputs, input_ids, attention_mask, aux_features=aux_features,
+                                  stop_gradient_heads=stop_gradient_heads)
+                total_loss1_sam = _divide_loss_fn(out1_sam, out2, clean_mask1, noisy_mask1, self.elr1, labels)
+                total_loss1_sam.backward()
+                optimizer1.second_step(zero_grad=True)
+            else:
+                optimizer1.step()
 
+            # ── Model2 backward + step ──
+            total_loss2 = _divide_loss_fn(out2, out1, clean_mask2, noisy_mask2, self.elr2, labels)
             optimizer2.zero_grad()
             total_loss2.backward()
             torch.nn.utils.clip_grad_norm_(model2.parameters(), max_norm=1.0)
-            optimizer2.step()
+            if use_sam2:
+                optimizer2.first_step(zero_grad=True)
+                out2_sam = model2(inputs, input_ids, attention_mask, aux_features=aux_features,
+                                  stop_gradient_heads=stop_gradient_heads)
+                total_loss2_sam = _divide_loss_fn(out2_sam, out1, clean_mask2, noisy_mask2, self.elr2, labels)
+                total_loss2_sam.backward()
+                optimizer2.second_step(zero_grad=True)
+            else:
+                optimizer2.step()
 
             running_loss += 0.5 * (total_loss1.item() + total_loss2.item()) * batch_size
             total_samples += batch_size
