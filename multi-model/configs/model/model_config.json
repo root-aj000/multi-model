@@ -395,9 +395,9 @@
   "SIMCLR_CONFIG": {
     "projection_dim": 128,
     "temperature": 0.5,
-    "epochs": 200,
+    "epochs": 100,
     "batch_size": 256,
-    "lr": 0.3,
+    "lr": 0.001,
     "weight_decay": 1e-4
   },
   "_comment_SIMCLR_CONFIG": "Hyperparameters for SimCLR pre-training. Only used when SIMCLR_PRETRAIN=true.",

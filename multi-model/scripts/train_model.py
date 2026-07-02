@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+from tqdm import tqdm
 
 from lib.models.factory import create_model
 from lib.utils.config import load_config
@@ -505,7 +506,8 @@ def main() -> None:
                     pg['lr'] = lr
                 simclr_model.train()
                 total = 0.0
-                for batch in simclr_loader:
+                _pbar = tqdm(simclr_loader, desc=f"SimCLR Epoch {ep+1}/{simclr_ep}", leave=False)
+                for batch in _pbar:
                     # batch shape: [B, 2, C, H, W]; split into two views.
                     views = batch.to(device, non_blocking=True, dtype=torch.float32)
                     x1 = views[:, 0]
@@ -515,6 +517,7 @@ def main() -> None:
                     loss.backward()
                     simclr_opt.step()
                     total += loss.item() * x1.size(0)
+                    _pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{lr:.2e}")
                 logger.info("SimCLR epoch %3d/%d: loss=%.4f lr=%.2e", ep + 1, simclr_ep, total / len(simclr_ds), lr)
 
     # ── Multi-model co-training (N >= 3) ─────────────────────────────────
