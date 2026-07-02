@@ -463,8 +463,9 @@ def main() -> None:
                     ])
                 def __call__(self, x):
                     return self.t(x), self.t(x)
-            from torchvision.datasets import ImageFolder
-            from torch.utils.data import DataLoader
+            from torch.utils.data import Dataset, DataLoader
+            from PIL import Image
+            import glob as _glob
             try:
                 from lib.utils.config import get_dataset_paths
                 _paths = get_dataset_paths("train", config.get("DATASET_ROOT"))
@@ -472,7 +473,25 @@ def main() -> None:
             except Exception:
                 dataset_root = config.get("DATASET_ROOT") or "dataset"
                 _simclr_root = f"{dataset_root}/train/images"
-            simclr_ds = ImageFolder(root=_simclr_root, transform=_SimCLRTransform())
+            _img_exts = ("*.jpg", "*.jpeg", "*.png", "*.webp", "*.bmp")
+            _img_paths = sorted(p for ext in _img_exts for p in _glob.glob(_simclr_root + "/" + ext) + _glob.glob(_simclr_root + "/" + ext.upper()))
+            if not _img_paths:
+                raise FileNotFoundError(
+                    f"SimCLR: no images found under {_simclr_root!r}. "
+                    "Set SIMCLR_PRETRAIN=false to skip, or check DATASET_ROOT."
+                )
+
+            class _SimCLRDataset(Dataset):
+                def __init__(self, paths, transform):
+                    self.paths = paths
+                    self.transform = transform
+                def __len__(self):
+                    return len(self.paths)
+                def __getitem__(self, idx):
+                    img = Image.open(self.paths[idx]).convert("RGB")
+                    return self.transform(img)
+
+            simclr_ds = _SimCLRDataset(_img_paths, _SimCLRTransform())
             simclr_loader = DataLoader(simclr_ds, batch_size=simclr_bs, shuffle=True,
                                         num_workers=min(8, os.cpu_count() or 4), pin_memory=True, drop_last=True)
             for ep in range(simclr_ep):
