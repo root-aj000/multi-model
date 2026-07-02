@@ -465,8 +465,14 @@ def main() -> None:
                     return self.t(x), self.t(x)
             from torchvision.datasets import ImageFolder
             from torch.utils.data import DataLoader
-            dataset_root = config.get("DATASET_ROOT") or "dataset"
-            simclr_ds = ImageFolder(root=f"{dataset_root}/images/train", transform=_SimCLRTransform())
+            try:
+                from lib.utils.config import get_dataset_paths
+                _paths = get_dataset_paths("train", config.get("DATASET_ROOT"))
+                _simclr_root = str(_paths["images"])
+            except Exception:
+                dataset_root = config.get("DATASET_ROOT") or "dataset"
+                _simclr_root = f"{dataset_root}/train/images"
+            simclr_ds = ImageFolder(root=_simclr_root, transform=_SimCLRTransform())
             simclr_loader = DataLoader(simclr_ds, batch_size=simclr_bs, shuffle=True,
                                         num_workers=min(8, os.cpu_count() or 4), pin_memory=True, drop_last=True)
             for ep in range(simclr_ep):

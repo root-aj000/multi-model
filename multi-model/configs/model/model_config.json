@@ -97,7 +97,10 @@
   "_comment_NOISY_ATTRIBUTES": "These attributes use a separate low-capacity MLP branch (noisy_branch) that is detached from the main shared representation. This prevents their noisy gradients from corrupting the features used by semantic heads. target_audience added — 28% train accuracy on a 6-class task indicates near-random labels, so it gets the same noisy-branch treatment.",
 
   "NOISY_BRANCH_HIDDEN": 256,
-  "_comment_NOISY_BRANCH_HIDDEN": "Hidden dimension of the noisy attribute MLP branch. Smaller than HIDDEN_DIM (512) to limit capacity and prevent overfitting to noise.",
+  "_comment_NOISY_BRANCH_HIDDEN": "Hidden dimension of the noisy attribute MLP branch. Increased from 128 → 256 to give the 4 noisy heads more capacity for diverse tasks.",
+
+  "LOSS_TRUNCATION": 5.0,
+  "_comment_LOSS_TRUNCATION": "Per-sample loss cap (max CE) for noisy attributes. Raised from 3.0 → 5.0: the old cap was clipping gradients from hard-but-informative samples, preventing the model from learning the harder noisy attributes (target_audience, likelihood_shares).",
 
   "USE_GRAPH_HEADS": true,
   "_comment_USE_GRAPH_HEADS": [

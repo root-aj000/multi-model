@@ -534,12 +534,10 @@ def setup_training_components(
 
     # Build loss truncation thresholds for noisy attributes.
     # Prevents individual samples with extremely wrong labels from
-    # producing unbounded gradients.  Threshold 3.0 is loose enough
-    # to not interfere with normal learning but tight enough to cap
-    # worst-case CE losses (which can exceed 15 for completely wrong
-    # predictions on e.g. 9-class tasks).
+    # producing unbounded gradients.
     noisy_attrs_trunc = cfg.get("NOISY_ATTRIBUTES", [])
-    loss_truncation = {attr: 3.0 for attr in noisy_attrs_trunc} if noisy_attrs_trunc else None
+    trunc_value = cfg.get("LOSS_TRUNCATION", 3.0)
+    loss_truncation = {attr: trunc_value for attr in noisy_attrs_trunc} if noisy_attrs_trunc else None
     if loss_truncation:
         logger.info("Loss truncation enabled: %s", loss_truncation)
 
