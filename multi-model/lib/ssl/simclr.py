@@ -46,5 +46,4 @@ class SimCLR(nn.Module):
         h2 = self.backbone(x2)
         z1 = self.projection(h1)
         z2 = self.projection(h2)
-        loss = self.info_nce_loss(z1, z2)
-        return loss, z1, z2
+        return z1, z2

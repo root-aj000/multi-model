@@ -428,6 +428,10 @@ def main() -> None:
             simclr_model = SimCLRModel(simclr_backbone,
                                         projection_dim=simclr_cfg.get("projection_dim", 128),
                                         temperature=simclr_cfg.get("temperature", 0.5))
+            num_gpus = torch.cuda.device_count()
+            if num_gpus > 1:
+                logger.info("SimCLR: wrapping model in DataParallel across %d GPUs", num_gpus)
+                simclr_model = torch.nn.DataParallel(simclr_model)
             simclr_model.to(device)
 
             class _LARS(torch.optim.Optimizer):
@@ -512,7 +516,8 @@ def main() -> None:
                     views = batch.to(device, non_blocking=True, dtype=torch.float32)
                     x1 = views[:, 0]
                     x2 = views[:, 1]
-                    loss, _, _ = simclr_model(x1, x2)
+                    z1, z2 = simclr_model(x1, x2)
+                    loss = simclr_model.module.info_nce_loss(z1, z2) if hasattr(simclr_model, 'module') else simclr_model.info_nce_loss(z1, z2)
                     simclr_opt.zero_grad()
                     loss.backward()
                     simclr_opt.step()
