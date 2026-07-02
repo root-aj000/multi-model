@@ -411,6 +411,9 @@ def main() -> None:
 
     num_epochs = args.epochs or config.get("epochs", DEFAULT_EPOCHS)
 
+    use_dividemix = config.get("USE_DIVIDEMIX", False)
+    use_coteaching = config.get("USE_COTEACHING", False) and not use_dividemix
+
     # ── SimCLR self-supervised pre-training ──────────────────────────────
     if config.get("SIMCLR_PRETRAIN", False):
         logger.info("SimCLR pre-training enabled — running before supervised training.")
@@ -564,9 +567,6 @@ def main() -> None:
     checkpoint_interval = args.checkpoint_interval or config.get("checkpoint_interval", 5)
     epochs_without_improvement = 0
     best_val_accuracy = -1.0
-
-    use_dividemix = config.get("USE_DIVIDEMIX", False)
-    use_coteaching = config.get("USE_COTEACHING", False) and not use_dividemix
 
     # Rolling history of per-attribute gaps (train - val), most recent first
     gap_history: List[Dict[str, float]] = []
