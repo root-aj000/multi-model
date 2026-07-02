@@ -96,7 +96,7 @@
   "NOISY_ATTRIBUTES": ["attention_score", "predicted_ctr", "likelihood_shares", "target_audience"],
   "_comment_NOISY_ATTRIBUTES": "These attributes use a separate low-capacity MLP branch (noisy_branch) that is detached from the main shared representation. This prevents their noisy gradients from corrupting the features used by semantic heads. target_audience added — 28% train accuracy on a 6-class task indicates near-random labels, so it gets the same noisy-branch treatment.",
 
-  "NOISY_BRANCH_HIDDEN": 128,
+  "NOISY_BRANCH_HIDDEN": 256,
   "_comment_NOISY_BRANCH_HIDDEN": "Hidden dimension of the noisy attribute MLP branch. Smaller than HIDDEN_DIM (512) to limit capacity and prevent overfitting to noise.",
 
   "USE_GRAPH_HEADS": true,
@@ -288,7 +288,7 @@
     "BUG-01 FIX: warmup is handled by SequentialLR+LinearLR in pipeline.py."
   ],
 
-  "mixup_alpha": 0.0,
+  "mixup_alpha": 0.2,
   "_comment_mixup_alpha": [
     "Mixup Beta distribution parameter. 0 disables Mixup.",
     "Set to 0: multi-task training with 9 conflicting label sets makes Mixup harmful.",
@@ -359,10 +359,10 @@
   "DIVIDEMIX_WARMUP_EPOCHS": 10,
   "_comment_DIVIDEMIX_WARMUP_EPOCHS": "Number of warmup epochs where DivideMix trains on the full dataset before applying GMM splitting.",
 
-  "DIVIDEMIX_CLEAN_THRESHOLD": 0.5,
+  "DIVIDEMIX_CLEAN_THRESHOLD": 0.55,
   "_comment_DIVIDEMIX_CLEAN_THRESHOLD": "GMM probability threshold for clean/noisy split in DivideMix.",
 
-  "DIVIDEMIX_LAMBDA_U": 1.0,
+  "DIVIDEMIX_LAMBDA_U": 0.5,
   "_comment_DIVIDEMIX_LAMBDA_U": "Weight for unsupervised (noisy sample) loss in DivideMix. Reduced from 25.0 → 1.0: original DivideMix designed for single-label CIFAR, but with 9 attributes the consistency CE sums to ~10-18 per sample — 25x gave 250-450 loss, overwhelming supervised signal.",
 
   "LABEL_CORRECTION_ENABLED": true,
@@ -386,7 +386,7 @@
   "FIXMATCH_LOSS_WEIGHT": 1.0,
   "_comment_FIXMATCH_LOSS_WEIGHT": "Weight for FixMatch loss. 1.0 = same scale as supervised CE.",
 
-  "SIMCLR_PRETRAIN": false,
+  "SIMCLR_PRETRAIN": true,
   "_comment_SIMCLR_PRETRAIN": "If true, run SimCLR self-supervised pre-training before supervised training.",
 
   "SIMCLR_CONFIG": {
@@ -399,7 +399,7 @@
   },
   "_comment_SIMCLR_CONFIG": "Hyperparameters for SimCLR pre-training. Only used when SIMCLR_PRETRAIN=true.",
 
-  "USE_PROTOTYPICAL_HEADS": false,
+  "USE_PROTOTYPICAL_HEADS": true,
   "_comment_USE_PROTOTYPICAL_HEADS": "If true, replaces linear classification heads for NOISY_ATTRIBUTES with PrototypicalNetwork heads (cosine similarity to learnable prototypes).",
 
   "PROTOTYPICAL_CONFIG": {
@@ -408,7 +408,7 @@
   },
   "_comment_PROTOTYPICAL_CONFIG": "Prototypical head hyperparameters.",
 
-  "USE_L2RW": false,
+  "USE_L2RW": true,
   "_comment_USE_L2RW": "If true, use Learning to Reweight (Ren et al.) — meta-learning per-sample weights from a clean validation set.",
 
   "L2RW_CONFIG": {
@@ -417,7 +417,7 @@
   },
   "_comment_L2RW_CONFIG": "Hyperparameters for L2RW meta-optimiser.",
 
-  "USE_META_WEIGHT_NET": false,
+  "USE_META_WEIGHT_NET": true,
   "_comment_USE_META_WEIGHT_NET": "If true, use Meta-Weight-Net (Shu et al.) — MLP mapping per-sample loss to weight, trained with bi-level meta-objective.",
 
   "META_WEIGHT_NET_CONFIG": {
@@ -430,13 +430,13 @@
   "N_CO_TRAIN_MODELS": 2,
   "_comment_N_CO_TRAIN_MODELS": "Number of co-training models for DivideMix/MultiModelCoTrain. 2 = standard DivideMix. 3+ = majority-vote ensemble.",
 
-  "USE_CONFIDENT_LEARNING": false,
+  "USE_CONFIDENT_LEARNING": true,
   "_comment_USE_CONFIDENT_LEARNING": "If true, run CleanLab-style confident learning offline before each epoch to identify likely mislabeled samples.",
 
   "CONFIDENT_LEARNING_THRESHOLD": "auto",
   "_comment_CONFIDENT_LEARNING_THRESHOLD": "Threshold for confident learning. 'auto' uses per-class thresholds from CleanLab.",
 
-  "USE_UDA_TEXT_AUG": false,
+  "USE_UDA_TEXT_AUG": true,
   "_comment_USE_UDA_TEXT_AUG": "If true, apply UDA-style text augmentation (back-translation or BERT masking) during training.",
 
   "UDA_TEXT_AUG_CONFIG": {
