@@ -462,7 +462,7 @@ def main() -> None:
                         T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                     ])
                 def __call__(self, x):
-                    return self.t(x), self.t(x)
+                    return torch.stack([self.t(x), self.t(x)], dim=0)
             from torch.utils.data import Dataset, DataLoader
             from PIL import Image
             import glob as _glob
@@ -505,9 +505,11 @@ def main() -> None:
                     pg['lr'] = lr
                 simclr_model.train()
                 total = 0.0
-                for images, _ in simclr_loader:
-                    x1, x2 = images
-                    x1, x2 = x1.to(device, non_blocking=True), x2.to(device, non_blocking=True)
+                for batch in simclr_loader:
+                    # batch shape: [B, 2, C, H, W]; split into two views.
+                    views = batch.to(device, non_blocking=True, dtype=torch.float32)
+                    x1 = views[:, 0]
+                    x2 = views[:, 1]
                     loss, _, _ = simclr_model(x1, x2)
                     simclr_opt.zero_grad()
                     loss.backward()
